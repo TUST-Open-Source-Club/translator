@@ -14,12 +14,15 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            features: vulkan
+            cargo_flags: --features vulkan
             target_name: linux-x86_64
           - os: macos-latest
-            features: metal
+            cargo_flags: --features metal
             target_name: macos-arm64
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +35,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release --features ${{ matrix.features }}
+        run: cargo build --release ${{ matrix.cargo_flags }}
 
       - name: Strip binary
         run: strip target/release/translate
@@ -41,34 +44,33 @@ jobs:
         run: MODEL_SOURCE=huggingface bash scripts/download-model.sh
 
       - name: Assemble tar.xz archives (without / with model)
-        shell: bash
         run: |
           set -euo pipefail
           VER="${GITHUB_REF_NAME}"
           PKG="qwen-translate-${VER}-${{ matrix.target_name }}"
-          rm -rf "$PKG"
-          mkdir -p "$PKG"
-          cp target/release/translate "$PKG/"
-          cp README.md README.zh-CN.md LICENSE "$PKG/"
-          cp -r scripts firefox "$PKG/"
-
-          tar -cJf "$PKG.tar.xz" "$PKG"
-
-          mkdir -p "$PKG/model"
-          if [ "$(uname)" = Darwin ]; then
+          if [ "$RUNNER_OS" = macOS ]; then
             MODEL_DIR="$HOME/Library/Application Support/qwen-translate"
           else
             MODEL_DIR="$HOME/.local/share/qwen-translate"
           fi
-          cp "$MODEL_DIR/Qwen3.5-2B-Q4_K_M.gguf" "$MODEL_DIR/Qwen3.5-2B-mmproj-F16.gguf" "$PKG/model/"
-          tar -cJf "$PKG-with-model.tar.xz" "$PKG"
+          rm -rf "$PKG" dist
+          mkdir -p "$PKG" dist
+          cp target/release/translate "$PKG/"
+          cp README.md README.zh-CN.md LICENSE "$PKG/"
+          cp -r scripts firefox "$PKG/"
 
-          if [ "$(uname)" = Darwin ]; then
+          tar -cJf "dist/$PKG.tar.xz" "$PKG"
+          mkdir -p "$PKG/model"
+          cp "$MODEL_DIR/Qwen3.5-2B-Q4_K_M.gguf" "$MODEL_DIR/Qwen3.5-2B-mmproj-F16.gguf" "$PKG/model/"
+          tar -cJf "dist/$PKG-with-model.tar.xz" "$PKG"
+
+          cd dist
+          if [ "$RUNNER_OS" = macOS ]; then
             shasum -a 256 "$PKG.tar.xz" "$PKG-with-model.tar.xz" > "$PKG-sha256sums.txt"
           else
             sha256sum "$PKG.tar.xz" "$PKG-with-model.tar.xz" > "$PKG-sha256sums.txt"
           fi
-          ls -lh "$PKG"*.tar.xz "$PKG-sha256sums.txt"
+          ls -lh
 
       - name: Build Linux packages (deb / rpm / pacman, without and with model)
         if: runner.os == 'Linux'
@@ -91,37 +93,52 @@ jobs:
           # without model: auto-download on first run
           fpm $FPM_COMMON -v "$VER" -n qwen-translate -t deb    --depends libvulkan1 \
             --description 'Local offline translation CLI (Qwen3.5-0.8B + llama.cpp); model auto-downloads on first run' \
-            -p "qwen-translate_${VER}_amd64.deb"
+            -p "dist/qwen-translate_${VER}_amd64.deb"
           fpm $FPM_COMMON -v "$PKG_VER" -n qwen-translate -t rpm    --depends vulkan-loader \
             --description 'Local offline translation CLI (Qwen3.5-0.8B + llama.cpp); model auto-downloads on first run' \
-            -p "qwen-translate-${PKG_VER}-1.x86_64.rpm"
+            -p "dist/qwen-translate-${PKG_VER}-1.x86_64.rpm"
           fpm $FPM_COMMON -v "$PKG_VER" -n qwen-translate -t pacman --depends vulkan-icd-loader \
             --description 'Local offline translation CLI (Qwen3.5-0.8B + llama.cpp); model auto-downloads on first run' \
-            -p "qwen-translate-${PKG_VER}-1-x86_64.pkg.tar.zst"
+            -p "dist/qwen-translate-${PKG_VER}-1-x86_64.pkg.tar.zst"
           # with model: installed to /usr/share/qwen-translate/ (global lookup path), works offline
           cp "$MODEL_DIR/Qwen3.5-2B-Q4_K_M.gguf" "$MODEL_DIR/Qwen3.5-2B-mmproj-F16.gguf" pkgroot/usr/share/qwen-translate/
           fpm $FPM_COMMON -v "$VER" -n qwen-translate-full -t deb    --depends libvulkan1 \
             --conflicts qwen-translate \
             --description 'Local offline translation CLI (Qwen3.5-0.8B + llama.cpp), model bundled' \
-            -p "qwen-translate-full_${VER}_amd64.deb"
+            -p "dist/qwen-translate-full_${VER}_amd64.deb"
           fpm $FPM_COMMON -v "$PKG_VER" -n qwen-translate-full -t rpm    --depends vulkan-loader \
             --conflicts qwen-translate \
             --description 'Local offline translation CLI (Qwen3.5-0.8B + llama.cpp), model bundled' \
-            -p "qwen-translate-full-${PKG_VER}-1.x86_64.rpm"
+            -p "dist/qwen-translate-full-${PKG_VER}-1.x86_64.rpm"
           fpm $FPM_COMMON -v "$PKG_VER" -n qwen-translate-full -t pacman --depends vulkan-icd-loader \
             --conflicts qwen-translate \
             --description 'Local offline translation CLI (Qwen3.5-0.8B + llama.cpp), model bundled' \
-            -p "qwen-translate-full-${PKG_VER}-1-x86_64.pkg.tar.zst"
-          ls -lh *.deb *.rpm *.pkg.tar.zst
+            -p "dist/qwen-translate-full-${PKG_VER}-1-x86_64.pkg.tar.zst"
+          ls -lh dist
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target_name }}
+          path: dist/*
+          compression-level: 0
+
+  publish:
+    # Publish whatever was built, even if one platform failed (the release is a draft)
+    if: ${{ !cancelled() }}
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      # One job creates the release: parallel jobs uploading to a draft each
+      # could otherwise end up creating several drafts for the same tag
       - name: Publish draft GitHub Release (review before publishing)
         uses: softprops/action-gh-release@v2
         with:
           draft: true
           generate_release_notes: true
-          files: |
-            qwen-translate-*.tar.xz
-            qwen-translate-*-sha256sums.txt
-            qwen-translate*.deb
-            qwen-translate*.rpm
-            qwen-translate*.pkg.tar.zst
+          files: dist/*
