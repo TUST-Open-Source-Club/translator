@@ -140,10 +140,60 @@ jobs:
           path: dist/*
           compression-level: 0
 
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Android target
+        run: rustup target add aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+
+      - name: Cross-compile (aarch64-linux-android, API 24)
+        run: |
+          export ANDROID_NDK="$ANDROID_NDK_LATEST_HOME" ANDROID_API_LEVEL=24
+          TC="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$TC/aarch64-linux-android24-clang"
+          export CXX_aarch64_linux_android="$TC/aarch64-linux-android24-clang++"
+          export AR_aarch64_linux_android="$TC/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/aarch64-linux-android24-clang"
+          cargo build --release --target aarch64-linux-android
+          "$TC/llvm-strip" target/aarch64-linux-android/release/translate
+
+      - name: Download model (for the model-bundled package)
+        run: MODEL_SOURCE=huggingface bash scripts/download-model.sh
+
+      - name: Assemble tar.xz archives (without / with model)
+        run: |
+          set -euo pipefail
+          PKG="qwen-translate-${GITHUB_REF_NAME}-android-aarch64"
+          rm -rf "$PKG" dist
+          mkdir -p "$PKG/scripts" dist
+          cp target/aarch64-linux-android/release/translate "$PKG/"
+          cp README.md README.zh-CN.md LICENSE "$PKG/"
+          cp scripts/install.sh scripts/download-model.sh "$PKG/scripts/"
+          tar -cJf "dist/$PKG.tar.xz" "$PKG"
+          mkdir -p "$PKG/model"
+          MODEL_DIR="$HOME/.local/share/qwen-translate"
+          cp "$MODEL_DIR/Qwen3.5-2B-Q4_K_M.gguf" "$MODEL_DIR/Qwen3.5-2B-mmproj-F16.gguf" "$PKG/model/"
+          tar -cJf "dist/$PKG-with-model.tar.xz" "$PKG"
+          cd dist
+          sha256sum "$PKG.tar.xz" "$PKG-with-model.tar.xz" > "$PKG-sha256sums.txt"
+          ls -lh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-android-aarch64
+          path: dist/*
+          compression-level: 0
+
   publish:
     # Publish whatever was built, even if one platform failed (the release is a draft)
     if: ${{ !cancelled() }}
-    needs: build
+    needs: [build, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

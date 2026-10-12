@@ -67,3 +67,28 @@ jobs:
           out=$(./target/release/translate --model-source huggingface --image tests/fixtures/hello-en.png)
           echo "image->zh: $out"
           echo "$out" | grep -q "编程"
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Android target
+        run: rustup target add aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+
+      - name: Cross-compile (aarch64-linux-android, API 24)
+        run: |
+          export ANDROID_NDK="$ANDROID_NDK_LATEST_HOME" ANDROID_API_LEVEL=24
+          TC="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$TC/aarch64-linux-android24-clang"
+          export CXX_aarch64_linux_android="$TC/aarch64-linux-android24-clang++"
+          export AR_aarch64_linux_android="$TC/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/aarch64-linux-android24-clang"
+          cargo build --release --target aarch64-linux-android
+          # Must run on a stock device: no libc++_shared.so / libomp.so dependency
+          "$TC/llvm-readelf" -d target/aarch64-linux-android/release/translate | tee needed.txt
+          ! grep -E "libc\+\+_shared|libomp" needed.txt

@@ -37,6 +37,7 @@ Grab an asset from [Releases](https://github.com/TUST-Open-Source-Club/translato
 | `qwen-translate-full_*` / `qwen-translate-full-*` | Same three formats **with the model** (installed to `/usr/share/qwen-translate/`, offline-ready) |
 | `qwen-translate-*-macos-arm64.tar.xz` (and `-with-model`) | macOS (Apple Silicon, Metal-accelerated) |
 | `qwen-translate-*-windows-x86_64.zip` (and `-with-model`) | Windows 10/11 x64 (CPU; static CRT, no runtime to install) |
+| `qwen-translate-*-android-aarch64.tar.xz` (and `-with-model`) | Android aarch64 for Termux (CPU; see below) |
 
 For tar.xz, extract and run `scripts/install.sh` (installs to `~/.local/bin`). The macOS binary is unsigned; run `xattr -d com.apple.quarantine ~/.local/bin/translate` once.
 
@@ -198,7 +199,7 @@ Notes:
 
 ## CI/CD
 
-- **CI** (push / PR): builds on Ubuntu (Vulkan), macOS (Metal) and Windows (CPU) + real-inference smoke tests (text and image)
+- **CI** (push / PR): builds on Ubuntu (Vulkan), macOS (Metal) and Windows (CPU) + real-inference smoke tests (text and image); Android aarch64 cross-compile check
 - **CD** (push a `v*` tag): builds release assets — per-platform tar.xz / zip (with/without model) + deb / rpm / pacman packages (with/without model) — and a single job creates a **draft** GitHub Release for manual review before publishing
 
 ## Uninstall

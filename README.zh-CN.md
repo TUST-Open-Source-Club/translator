@@ -37,6 +37,7 @@ translate --image screenshot.png                    # 图片翻译（多模态�
 | `qwen-translate-full_*` / `qwen-translate-full-*` | 上述三格式的**带模型**版本（模型装进 `/usr/share/qwen-translate/`，离线可用） |
 | `qwen-translate-*-macos-arm64.tar.xz`（及 `-with-model`） | macOS（Apple Silicon，Metal 加速） |
 | `qwen-translate-*-windows-x86_64.zip`（及 `-with-model`） | Windows 10/11 x64（CPU；静态链接运行库，无需安装 VC++ 运行时） |
+| `qwen-translate-*-android-aarch64.tar.xz`（及 `-with-model`） | Android aarch64，用于 Termux（CPU；见下文） |
 
 tar.xz 解压后运行 `scripts/install.sh`（装到 `~/.local/bin`）。macOS 二进制未签名，首次运行前需 `xattr -d com.apple.quarantine ~/.local/bin/translate`。
 
@@ -198,7 +199,7 @@ scripts/pack-crx.py chrome path/to/key.pem qwen-translate.crx --zip qwen-transla
 
 ## CI/CD
 
-- **CI**（push / PR）：Ubuntu（Vulkan）+ macOS（Metal）+ Windows（CPU）构建 + 真实推理冒烟测试（文本 + 图片）
+- **CI**（push / PR）：Ubuntu（Vulkan）+ macOS（Metal）+ Windows（CPU）构建 + 真实推理冒烟测试（文本 + 图片）；Android aarch64 交叉编译检查
 - **CD**（推送 `v*` tag 触发）：构建 Release 资产——各平台 tar.xz / zip（含/不含模型）+ deb / rpm / pacman 安装包（各含/不含模型两种），由单独作业汇总后以**草稿**形式创建 Release，人工确认后发布
 
 ## 卸载
