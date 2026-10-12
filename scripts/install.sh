@@ -36,4 +36,4 @@ case ":$PATH:" in
   *) echo "Note: $BIN_DIR is not in PATH; add it in your shell config (e.g. ~/.bashrc or ~/.zshrc)" ;;
 esac
 
-echo "Firefox extension: run $ROOT/scripts/install-native-host.sh, then load $ROOT/firefox/manifest.json in about:debugging"
+echo "Browser extension: run $ROOT/scripts/install-native-host.sh, then load $ROOT/firefox (Firefox) or $ROOT/chrome (Chrome/Edge); see README"

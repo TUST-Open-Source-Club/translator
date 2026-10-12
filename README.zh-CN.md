@@ -21,7 +21,7 @@ translate --image screenshot.png                    # 图片翻译（多模态�
 - 默认流式输出（`--no-stream` 关闭）
 - 有 GPU 用 GPU（Vulkan / CUDA / Metal），没有自动回退 CPU
 - stdout 只输出结果，日志/报错全走 stderr
-- 可选 Firefox 扩展：右键「翻译选中内容」，由同一个二进制驱动
+- 可选 Firefox / Chrome 扩展：右键「翻译选中内容」，由同一个二进制驱动
 
 ## 安装
 
@@ -117,22 +117,27 @@ translate --log-level info "…"       # 显示 llama.cpp 内部日志（默认 
 | 4 | 下载失败 |
 | 5 | 模型不支持所请求的功能（如图片） |
 
-## Firefox 扩展
+## 浏览器扩展（Firefox / Chrome）
 
-1. 安装原生消息宿主清单（告知 Firefox 翻译程序的位置）：
+任意网页选中文字后右键「翻译选中内容」，选区旁浮层显示译文（可复制）。Firefox 用 `firefox/`，Chrome 及其它 Chromium 系浏览器（Edge、Brave、Vivaldi 等）用 `chrome/`，两者调用同一个翻译程序。
+
+1. 安装原生消息宿主清单（告知浏览器翻译程序的位置；Firefox 与本机已安装的 Chromium 系浏览器一并配置）：
 
    ```bash
    scripts/install-native-host.sh
    ```
 
-2. 打开 Firefox → `about:debugging#/runtime/this-firefox` → 「临时载入附加组件」→ 选择 `firefox/manifest.json`。
+2. 载入扩展：
+   - **Firefox**：`about:debugging#/runtime/this-firefox` → 「临时载入附加组件」→ 选择 `firefox/manifest.json`。
+   - **Chrome / Edge / Brave**：`chrome://extensions` → 打开「开发者模式」→「加载已解压的扩展程序」→ 选择 `chrome/` 目录。扩展 ID 由 manifest 中的 `key` 固定为 `bfkmmaobjaldoelkdphajjagomjehbpc`，宿主清单已放行该 ID。
 
-3. 任意网页选中文字 → 右键「翻译选中内容」→ 选区旁浮层显示译文（可复制）。
+3. 任意网页选中文字 → 右键「翻译选中内容」→ 选区旁浮层显示译文。
 
 说明：
-- 扩展与翻译程序之间走 Native Messaging 长连接，模型常驻内存，只有第一次翻译需要加载模型。
-- 浏览器重启后临时加载的扩展会消失，需重新在 about:debugging 载入；长期使用可打包签名或用 `web-ext run`。
-- 受限页面（`about:*`、`addons.mozilla.org` 等）无法注入浮层，属于浏览器限制。
+- 扩展与翻译程序之间走 Native Messaging 连接，模型在两次翻译之间常驻内存，空闲 5 分钟后自动释放。
+- 浮层脚本只在右键点击时通过 `activeTab` 注入当前页面（所在 frame），不申请「读取和更改所有网站数据」权限。
+- Firefox 重启后临时加载的扩展会消失，需重新在 about:debugging 载入；长期使用可打包签名或用 `web-ext run`。
+- 受限页面（`about:*`、`chrome://*`、扩展商店等）无法注入浮层，属于浏览器限制。
 - Firefox 内置翻译功能不开放第三方翻译引擎 API，故采用右键菜单 + 浮层方案。
 
 ## CI/CD
@@ -143,8 +148,10 @@ translate --log-level info "…"       # 显示 llama.cpp 内部日志（默认 
 ## 卸载
 
 ```bash
-rm ~/.mozilla/native-messaging-hosts/qwen_translate.json   # Linux
-rm -rf ~/.local/share/qwen-translate                        # 模型与 wrapper
+rm ~/.mozilla/native-messaging-hosts/qwen_translate.json         # Linux，Firefox
+rm ~/.config/*/NativeMessagingHosts/qwen_translate.json           # Linux，Chrome/Chromium/Edge/Vivaldi
+rm ~/.config/BraveSoftware/*/NativeMessagingHosts/qwen_translate.json  # Linux，Brave
+rm -rf ~/.local/share/qwen-translate                              # 模型与 wrapper
 rm ~/.local/bin/translate
 ```
 
