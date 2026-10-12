@@ -29,11 +29,20 @@ fn utf16(bytes: &[u8], from_bytes: fn([u8; 2]) -> u16) -> String {
 
 fn not_utf8(bytes: Vec<u8>) -> String {
     #[cfg(windows)]
-    if let Some(text) = windows::decode_code_page(&bytes) {
-        return text;
+    if !cut_off_utf8(&bytes) {
+        if let Some(text) = windows::decode_code_page(&bytes) {
+            return text;
+        }
     }
     eprintln!("warning: input is not valid UTF-8; invalid bytes were replaced");
     String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// UTF-8 that merely ends in the middle of a character (e.g. cut off by `head -c`):
+/// decoding it with the legacy code page would garble the whole text
+#[cfg(any(windows, test))]
+fn cut_off_utf8(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes).is_err_and(|e| e.error_len().is_none())
 }
 
 /// cmd.exe pipes (`echo 你好 | translate`) and legacy "ANSI" text files use the
@@ -86,7 +95,7 @@ mod windows {
 
 #[cfg(test)]
 mod tests {
-    use super::decode;
+    use super::{cut_off_utf8, decode};
 
     #[test]
     fn plain_utf8() {
@@ -109,5 +118,14 @@ mod tests {
     #[test]
     fn invalid_utf8_is_replaced() {
         assert_eq!(decode(b"ab\xFFcd".to_vec()), "ab\u{FFFD}cd");
+    }
+
+    #[test]
+    fn cut_off_utf8_is_still_utf8() {
+        let text = "你好世界".as_bytes();
+        assert!(cut_off_utf8(&text[..text.len() - 1]));
+        // GBK "你好" is invalid UTF-8 right away, not merely cut off
+        assert!(!cut_off_utf8(b"\xC4\xE3\xBA\xC3"));
+        assert_eq!(decode(text[..text.len() - 1].to_vec()), "你好世\u{FFFD}");
     }
 }
