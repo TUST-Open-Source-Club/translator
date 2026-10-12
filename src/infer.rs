@@ -615,13 +615,17 @@ fn sentences(text: &str) -> Vec<&str> {
     out
 }
 
-/// Fallback: strip <think>...</think> blocks
+/// Fallback: drop a reasoning block the model opened itself. The prompt pre-fills an
+/// empty one, so a block can only appear at the very start; a "</think>" further on
+/// belongs to the translation (e.g. a text about these tags) and is kept.
 fn strip_think(s: &str) -> &str {
     let s = s.trim();
-    match s.rfind("</think>") {
-        Some(end) => s[end + "</think>".len()..].trim(),
-        None => s,
+    if let Some(rest) = s.strip_prefix("<think>") {
+        if let Some(end) = rest.find("</think>") {
+            return rest[end + "</think>".len()..].trim();
+        }
     }
+    s
 }
 
 #[cfg(test)]
@@ -730,6 +734,14 @@ mod tests {
         // explicit choices always win
         let explicit = resolve_direction("안녕하세요", Some(Lang::Ja), Some(Lang::En));
         assert!(explicit == (Some(Lang::Ja), Lang::En));
+    }
+
+    #[test]
+    fn strip_think_only_drops_a_leading_block() {
+        assert_eq!(strip_think("<think>\nhmm\n</think>\n\n你好"), "你好");
+        assert_eq!(strip_think("  你好\n"), "你好");
+        let about_tags = "模型把推理包裹在 <think> 和 </think> 标签中。";
+        assert_eq!(strip_think(about_tags), about_tags);
     }
 
     #[test]
