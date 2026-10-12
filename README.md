@@ -39,6 +39,8 @@ Grab an asset from [Releases](https://github.com/TUST-Open-Source-Club/translato
 
 For tar.xz, extract and run `scripts/install.sh` (installs to `~/.local/bin`). The macOS binary is unsigned; run `xattr -d com.apple.quarantine ~/.local/bin/translate` once.
 
+On Windows, extract the zip and run `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`: it installs `translate.exe` to `%LOCALAPPDATA%\Programs\qwen-translate` (added to the user PATH; no admin rights needed) and the bundled model, if any, to `%LOCALAPPDATA%\qwen-translate`. The extracted folder also works as-is (the model is found in `model\` next to the exe).
+
 ### From source
 
 ```bash
@@ -53,7 +55,12 @@ cargo build --release --features cuda
 
 # macOS (Metal)
 cargo build --release --features metal
+
+# Windows (CPU; or --features vulkan with the Vulkan SDK installed)
+cargo build --release
 ```
+
+Windows build deps: Visual Studio Build Tools (C++ workload), CMake and LLVM (`winget install Kitware.CMake LLVM.LLVM`).
 
 Build deps: cmake, clang, a C++ compiler. Linux Vulkan builds also need SPIRV-Headers:
 
@@ -96,6 +103,7 @@ translate --log-level info "…"       # llama.cpp internals (default: warn, qui
 
 Arguments win over stdin; with neither, you get the help text. Decoding is greedy (deterministic).
 stdin may be UTF-8 (with or without BOM) or UTF-16 with BOM; on Windows, input in the console code page (e.g. `echo 你好 | translate` in cmd.exe with GBK) is decoded too.
+In Windows PowerShell 5.1, pipes to native programs are ASCII-encoded by default and captured output is decoded with the OEM code page; run `$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()` first. PowerShell 7 pipes UTF-8 already but still decodes captured output with the console code page, so set `[Console]::OutputEncoding` there too. Output shown directly in the console is always correct.
 The model runs in non-thinking mode (Qwen3.5-0.8B is non-thinking by default; `/no_think` is not supported).
 
 Model lookup order (first hit wins):
@@ -127,6 +135,12 @@ Right-click "翻译选中内容" (translate selection) on any page; a floating p
 
    ```bash
    scripts/install-native-host.sh
+   ```
+
+   On Windows (registers Firefox, Chrome, Edge, Chromium and Brave under HKCU; no admin rights needed):
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\install-native-host.ps1
    ```
 
 2. Load the extension:
@@ -163,6 +177,14 @@ rm ~/.config/*/NativeMessagingHosts/qwen_translate.json           # Linux, Chrom
 rm ~/.config/BraveSoftware/*/NativeMessagingHosts/qwen_translate.json  # Linux, Brave
 rm -rf ~/.local/share/qwen-translate                              # model & wrapper
 rm ~/.local/bin/translate
+```
+
+Windows (PowerShell):
+
+```powershell
+scripts\install-native-host.ps1 -Uninstall                  # browser registrations
+Remove-Item -Recurse "$env:LOCALAPPDATA\Programs\qwen-translate", "$env:LOCALAPPDATA\qwen-translate"
+# then remove %LOCALAPPDATA%\Programs\qwen-translate from the user PATH (Settings → Environment variables)
 ```
 
 ## Troubleshooting

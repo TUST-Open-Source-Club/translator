@@ -30,11 +30,12 @@ REPO="${MODEL_REPO:-$REPO}"
 SOURCE="${MODEL_SOURCE:-modelscope}"
 MMPROJ_REMOTE="mmproj-F16.gguf"
 
-if [[ "$(uname)" == "Darwin" ]]; then
-  DEST_DIR="$HOME/Library/Application Support/qwen-translate"
-else
-  DEST_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/qwen-translate"
-fi
+case "$(uname -s)" in
+  Darwin) DEST_DIR="$HOME/Library/Application Support/qwen-translate" ;;
+  # Git Bash / MSYS2 / Cygwin on Windows: %LOCALAPPDATA%\qwen-translate
+  MINGW* | MSYS* | CYGWIN*) DEST_DIR="$(cygpath -u "$LOCALAPPDATA")/qwen-translate" ;;
+  *) DEST_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/qwen-translate" ;;
+esac
 mkdir -p "$DEST_DIR"
 
 download_one() {

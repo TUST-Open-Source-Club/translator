@@ -39,6 +39,8 @@ translate --image screenshot.png                    # 图片翻译（多模态�
 
 tar.xz 解压后运行 `scripts/install.sh`（装到 `~/.local/bin`）。macOS 二进制未签名，首次运行前需 `xattr -d com.apple.quarantine ~/.local/bin/translate`。
 
+Windows：解压 zip 后运行 `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`，`translate.exe` 装到 `%LOCALAPPDATA%\Programs\qwen-translate` 并加入用户 PATH（无需管理员权限），包内模型（如有）装到 `%LOCALAPPDATA%\qwen-translate`。也可不安装，直接在解压目录使用（会自动找到 exe 同级 `model\` 中的模型）。
+
 ### 从源码构建
 
 ```bash
@@ -53,7 +55,12 @@ cargo build --release --features cuda
 
 # macOS（Metal）
 cargo build --release --features metal
+
+# Windows（纯 CPU；装好 Vulkan SDK 后可加 --features vulkan）
+cargo build --release
 ```
+
+Windows 构建依赖：Visual Studio Build Tools（C++ 工作负载）、CMake、LLVM（`winget install Kitware.CMake LLVM.LLVM`）。
 
 构建依赖：cmake、clang、C++ 编译器。Linux Vulkan 构建还需要 SPIRV-Headers：
 
@@ -96,6 +103,7 @@ translate --log-level info "…"       # 显示 llama.cpp 内部日志（默认 
 
 参数与 stdin 同时存在时优先用参数；两者都没有时打印帮助。解码为贪心策略（确定性输出）。
 stdin 支持 UTF-8（可带 BOM）与带 BOM 的 UTF-16；Windows 下控制台代码页编码的输入（如 GBK 环境的 cmd 中 `echo 你好 | translate`）也能正确识别。
+Windows PowerShell 5.1 默认以 ASCII 向外部程序传管道、以 OEM 代码页解码捕获的输出，使用前先执行 `$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()`。PowerShell 7 管道默认已是 UTF-8，但捕获输出仍按控制台代码页解码，同样需要设置 `[Console]::OutputEncoding`。直接显示在控制台的输出始终正常。
 模型运行在非思考模式（Qwen3.5 本身即默认非思考，不支持 /no_think 软开关）。
 
 模型查找顺序（命中即用）：
@@ -127,6 +135,12 @@ stdin 支持 UTF-8（可带 BOM）与带 BOM 的 UTF-16；Windows 下控制台�
 
    ```bash
    scripts/install-native-host.sh
+   ```
+
+   Windows（在 HKCU 下为 Firefox、Chrome、Edge、Chromium、Brave 注册，无需管理员权限）：
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\install-native-host.ps1
    ```
 
 2. 载入扩展：
@@ -163,6 +177,14 @@ rm ~/.config/*/NativeMessagingHosts/qwen_translate.json           # Linux，Chro
 rm ~/.config/BraveSoftware/*/NativeMessagingHosts/qwen_translate.json  # Linux，Brave
 rm -rf ~/.local/share/qwen-translate                              # 模型与 wrapper
 rm ~/.local/bin/translate
+```
+
+Windows（PowerShell）：
+
+```powershell
+scripts\install-native-host.ps1 -Uninstall                  # 浏览器注册信息
+Remove-Item -Recurse "$env:LOCALAPPDATA\Programs\qwen-translate", "$env:LOCALAPPDATA\qwen-translate"
+# 再从用户 PATH 中删除 %LOCALAPPDATA%\Programs\qwen-translate（设置 → 环境变量）
 ```
 
 ## 故障排查
