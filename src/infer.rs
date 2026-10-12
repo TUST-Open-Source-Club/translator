@@ -202,12 +202,14 @@ impl Translator {
                 break;
             }
             let piece = vocab.token_to_piece(token, false, None);
+            out_bytes.extend_from_slice(&piece);
             if stream {
                 let mut out = stdout.lock();
-                let _ = out.write_all(&piece);
-                let _ = out.flush();
+                if out.write_all(&piece).and_then(|()| out.flush()).is_err() {
+                    // The reader went away (e.g. `| head`): stop generating
+                    break;
+                }
             }
-            out_bytes.extend_from_slice(&piece);
             batch.clear();
             batch.add(token, pos, &[0], true)?;
             pos += 1;

@@ -4,7 +4,7 @@ mod infer;
 mod logging;
 mod native_host;
 
-use std::io::{IsTerminal, Read};
+use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -240,12 +240,20 @@ fn no_input() -> ! {
         .exit()
 }
 
-fn print_result(out: &str, streamed: bool) {
-    if !streamed {
-        print!("{out}");
-    }
-    if !out.ends_with('\n') {
-        println!();
+/// Write the result to stdout (only the final newline if it was streamed already).
+/// A reader that went away early (e.g. `| head -c0`) is normal for a filter: stop
+/// quietly instead of panicking like print! does.
+fn print_result(out: &str, streamed: bool) -> Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    let body: &[u8] = if streamed { b"" } else { out.as_bytes() };
+    let newline: &[u8] = if out.ends_with('\n') { b"" } else { b"\n" };
+    let res = stdout
+        .write_all(body)
+        .and_then(|()| stdout.write_all(newline))
+        .and_then(|()| stdout.flush());
+    match res {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        res => Ok(res?),
     }
 }
 
@@ -329,8 +337,7 @@ fn run() -> Result<()> {
             _ => None,
         };
         let out = translator.translate_image(image_path, region, source, args.to, !args.no_stream)?;
-        print_result(&out, !args.no_stream);
-        return Ok(());
+        return print_result(&out, !args.no_stream);
     }
 
     if args.x.is_some() || args.y.is_some() || args.w.is_some() || args.h.is_some() {
@@ -359,8 +366,7 @@ fn run() -> Result<()> {
         .to
         .unwrap_or_else(|| default_target(source.unwrap_or_else(|| Lang::detect(text))));
     let out = translator.translate(text, source, target, !args.no_stream)?;
-    print_result(&out, !args.no_stream);
-    Ok(())
+    print_result(&out, !args.no_stream)
 }
 
 fn main() -> ExitCode {
