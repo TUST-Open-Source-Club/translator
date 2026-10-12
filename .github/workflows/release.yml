@@ -67,7 +67,7 @@ jobs:
           mkdir -p "$PKG" dist
           cp "target/release/$EXE" "$PKG/"
           cp README.md README.zh-CN.md LICENSE "$PKG/"
-          cp -r scripts firefox "$PKG/"
+          cp -r scripts firefox chrome "$PKG/"
 
           # zip on Windows, tar.xz elsewhere
           archive() {
@@ -103,7 +103,7 @@ jobs:
           rm -rf pkgroot
           mkdir -p pkgroot/usr/bin pkgroot/usr/share/qwen-translate
           cp target/release/translate pkgroot/usr/bin/
-          cp -r firefox scripts README.md README.zh-CN.md LICENSE pkgroot/usr/share/qwen-translate/
+          cp -r firefox chrome scripts README.md README.zh-CN.md LICENSE pkgroot/usr/share/qwen-translate/
 
           FPM_COMMON="-s dir -C pkgroot --license GPL-3.0-only \
             --maintainer TUST-Open-Source-Club \
@@ -190,10 +190,47 @@ jobs:
           path: dist/*
           compression-level: 0
 
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package browser extensions (Firefox zip, Chrome zip + CRX)
+        env:
+          # PEM private key matching the "key" in chrome/manifest.json
+          CRX_PRIVATE_KEY: ${{ secrets.CRX_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          VER="${GITHUB_REF_NAME#v}"
+          # Browsers accept 1-4 dot-separated integers only (v1.2.0-rc1 -> 1.2.0)
+          EXT_VER="${VER%%-*}"
+          PKG="qwen-translate-extension-${GITHUB_REF_NAME}"
+          rm -rf stage dist
+          mkdir -p stage dist
+          for b in firefox chrome; do
+            cp -r "$b" "stage/$b"
+            jq --arg v "$EXT_VER" '.version = $v' "$b/manifest.json" > "stage/$b/manifest.json"
+          done
+          (cd stage/firefox && zip -qr -X "../../dist/$PKG-firefox.zip" .)
+          if [ -n "${CRX_PRIVATE_KEY:-}" ]; then
+            (umask 077 && printf '%s\n' "$CRX_PRIVATE_KEY" > crx-key.pem)
+            python3 scripts/pack-crx.py stage/chrome crx-key.pem "dist/$PKG-chrome.crx" --zip "dist/$PKG-chrome.zip"
+            rm -f crx-key.pem
+          else
+            echo "::warning::CRX_PRIVATE_KEY secret is not set; publishing the Chrome zip without a .crx"
+            (cd stage/chrome && zip -qr -X "../../dist/$PKG-chrome.zip" .)
+          fi
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-extension
+          path: dist/*
+
   publish:
     # Publish whatever was built, even if one platform failed (the release is a draft)
     if: ${{ !cancelled() }}
-    needs: [build, android]
+    needs: [build, android, extension]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

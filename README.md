@@ -38,6 +38,7 @@ Grab an asset from [Releases](https://github.com/TUST-Open-Source-Club/translato
 | `qwen-translate-*-macos-arm64.tar.xz` (and `-with-model`) | macOS (Apple Silicon, Metal-accelerated) |
 | `qwen-translate-*-windows-x86_64.zip` (and `-with-model`) | Windows 10/11 x64 (CPU; static CRT, no runtime to install) |
 | `qwen-translate-*-android-aarch64.tar.xz` (and `-with-model`) | Android aarch64 for Termux (CPU; see below) |
+| `qwen-translate-extension-*-firefox.zip` / `-chrome.zip` / `-chrome.crx` | Browser extensions (see [Browser extensions](#browser-extensions-firefox--chrome)) |
 
 For tar.xz, extract and run `scripts/install.sh` (installs to `~/.local/bin`). The macOS binary is unsigned; run `xattr -d com.apple.quarantine ~/.local/bin/translate` once.
 
@@ -200,7 +201,7 @@ Notes:
 ## CI/CD
 
 - **CI** (push / PR): builds on Ubuntu (Vulkan), macOS (Metal) and Windows (CPU) + real-inference smoke tests (text and image); Android aarch64 cross-compile check
-- **CD** (push a `v*` tag): builds release assets — per-platform tar.xz / zip (with/without model) + deb / rpm / pacman packages (with/without model) — and a single job creates a **draft** GitHub Release for manual review before publishing
+- **CD** (push a `v*` tag): builds release assets — per-platform tar.xz / zip (with/without model) + deb / rpm / pacman packages (with/without model) — and a single job creates a **draft** GitHub Release for manual review before publishing. The Chrome `.crx` is signed only when the repository secret `CRX_PRIVATE_KEY` (PEM key matching `chrome/manifest.json`'s `key`) is set; otherwise only the zip is published
 
 ## Uninstall
 

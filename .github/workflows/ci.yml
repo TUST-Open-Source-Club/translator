@@ -92,3 +92,36 @@ jobs:
           # Must run on a stock device: no libc++_shared.so / libomp.so dependency
           "$TC/llvm-readelf" -d target/aarch64-linux-android/release/translate | tee needed.txt
           ! grep -E "libc\+\+_shared|libomp" needed.txt
+
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Firefox and Chrome builds share their scripts
+        run: |
+          cmp firefox/background.js chrome/background.js
+          cmp firefox/content.js chrome/content.js
+
+      - name: Syntax and manifests
+        run: |
+          for f in firefox/*.js; do node --check "$f"; done
+          python3 -m json.tool firefox/manifest.json > /dev/null
+          python3 -m json.tool chrome/manifest.json > /dev/null
+
+      - name: Pack CRX with a throwaway key (format check)
+        run: |
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out test-key.pem
+          python3 - <<'PY'
+          import base64, json, subprocess
+          der = subprocess.run(["openssl", "pkey", "-in", "test-key.pem", "-pubout", "-outform", "DER"],
+                               capture_output=True, check=True).stdout
+          m = json.load(open("chrome/manifest.json"))
+          m["key"] = base64.b64encode(der).decode()
+          import os, shutil
+          shutil.copytree("chrome", "chrome-test")
+          json.dump(m, open("chrome-test/manifest.json", "w"))
+          PY
+          python3 scripts/pack-crx.py chrome-test test-key.pem test.crx --zip test.zip --version 1.2.3
+          head -c 4 test.crx | grep -q Cr24
+          unzip -l test.zip
