@@ -2,11 +2,14 @@
 
 const HOST = "qwen_translate";
 const MENU_ID = "qt-translate-selection";
+// The host keeps the model (1-4 GB RAM, by variant) loaded; release it after this long unused
+const IDLE_MS = 5 * 60 * 1000;
 
 let port = null;
 let queue = [];
 let busy = false;
 let nextId = 1;
+let idleTimer = null;
 
 function sendToPanel(req, msg) {
   return browser.tabs.sendMessage(req.tabId, msg, { frameId: req.frameId });
@@ -27,6 +30,7 @@ function ensurePort() {
     const req = queue.shift();
     busy = false;
     if (req) notify(req, { translation: msg.translation, error: msg.error });
+    if (queue.length === 0) scheduleIdle();
     pump();
   });
   port.onDisconnect.addListener((p) => {
@@ -42,8 +46,21 @@ function ensurePort() {
   return true;
 }
 
+// Closing the port ends the host process (stdin EOF), freeing the model's memory;
+// the next request starts it again
+function scheduleIdle() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (port && !busy && queue.length === 0) {
+      port.disconnect();
+      port = null;
+    }
+  }, IDLE_MS);
+}
+
 function pump() {
   if (busy || queue.length === 0) return;
+  clearTimeout(idleTimer);
   if (!ensurePort()) {
     const pending = queue;
     queue = [];
