@@ -130,10 +130,17 @@ pub struct Translator {
     backend: LlamaBackend,
     model: LlamaModel,
     mtmd: Option<MtmdContext>,
+    threads: i32,
+}
+
+/// Default inference threads: one per available core
+fn default_threads() -> i32 {
+    std::thread::available_parallelism().map_or(4, |n| n.get() as i32)
 }
 
 impl Translator {
-    pub fn load(model_path: &Path, gpu_layers: u32) -> Result<Self> {
+    /// `threads`: CPU threads for inference (None = [`default_threads`])
+    pub fn load(model_path: &Path, gpu_layers: u32, threads: Option<NonZeroU32>) -> Result<Self> {
         let backend = LlamaBackend::init()?;
         let params = LlamaModelParams::default().with_n_gpu_layers(gpu_layers);
         let model = LlamaModel::load_from_file(&backend, model_path, &params)
@@ -142,18 +149,21 @@ impl Translator {
             backend,
             model,
             mtmd: None,
+            threads: threads.map_or_else(default_threads, |n| n.get() as i32),
         })
     }
 
     /// Text + image translation (additionally loads the mmproj projector)
-    pub fn load_vision(model_path: &Path, mmproj_path: &Path, gpu_layers: u32) -> Result<Self> {
-        let mut t = Self::load(model_path, gpu_layers)?;
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get() as i32)
-            .unwrap_or(4);
+    pub fn load_vision(
+        model_path: &Path,
+        mmproj_path: &Path,
+        gpu_layers: u32,
+        threads: Option<NonZeroU32>,
+    ) -> Result<Self> {
+        let mut t = Self::load(model_path, gpu_layers, threads)?;
         let params = MtmdContextParams {
             use_gpu: gpu_layers > 0,
-            n_threads: threads,
+            n_threads: t.threads,
             ..Default::default()
         };
         let mmproj_str = mmproj_path
@@ -171,14 +181,11 @@ impl Translator {
     }
 
     fn ctx_params(&self, n_ctx: u32) -> LlamaContextParams {
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get() as i32)
-            .unwrap_or(4);
         LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(n_ctx))
             .with_n_batch(N_BATCH as u32)
-            .with_n_threads(threads)
-            .with_n_threads_batch(threads)
+            .with_n_threads(self.threads)
+            .with_n_threads_batch(self.threads)
     }
 
     /// Greedy decode loop (deterministic output); `stream` prints pieces to stdout as

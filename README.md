@@ -89,6 +89,7 @@ translate --download-only --fast     # download only the 0.8B variant
 translate --download-only --huggingface # download via HuggingFace (default: ModelScope)
 translate --no-stream "…"            # disable streaming output
 translate --gpu-layers 0 "…"         # force CPU
+translate --threads 4 "…"            # CPU threads (default: one per core; or TRANSLATE_THREADS)
 translate --model-source huggingface "…" # download via HuggingFace (default: modelscope)
 translate --log-level info "…"       # llama.cpp internals (default: warn, quiet)
 ```

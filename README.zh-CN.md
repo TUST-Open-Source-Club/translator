@@ -89,6 +89,7 @@ translate --download-only --huggingface # 从 HuggingFace 下载（默认 ModelS
 translate --model /path/to.gguf "…"  # GGUF 路径或变体关键字（fast/default/quality）
 translate --no-stream "…"            # 关闭流式输出
 translate --gpu-layers 0 "…"         # 强制纯 CPU
+translate --threads 4 "…"            # CPU 推理线程数（默认每核一个；或环境变量 TRANSLATE_THREADS）
 translate --model-source huggingface "…" # 自动下载走 HuggingFace（默认 modelscope）
 translate --log-level info "…"       # 显示 llama.cpp 内部日志（默认 warn，静默）
 ```

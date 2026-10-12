@@ -6,6 +6,7 @@ mod logging;
 mod native_host;
 
 use std::io::{IsTerminal, Read, Write};
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -85,6 +86,10 @@ struct Args {
     /// Layers to offload to the GPU (falls back to CPU when unavailable)
     #[arg(long, default_value_t = 999)]
     gpu_layers: u32,
+
+    /// CPU threads for inference (default: one per core)
+    #[arg(long, env = "TRANSLATE_THREADS")]
+    threads: Option<NonZeroU32>,
 
     /// llama.cpp log level
     #[arg(long, value_enum, default_value = "warn")]
@@ -304,7 +309,7 @@ fn run() -> Result<()> {
     if args.native_host {
         return native_host::run(|| {
             ensure_model(&choice, model_source)?;
-            Translator::load(&choice.path, args.gpu_layers)
+            Translator::load(&choice.path, args.gpu_layers, args.threads)
                 .map_err(|e| err::or_kind(e, AppError::Model))
         });
     }
@@ -332,8 +337,9 @@ fn run() -> Result<()> {
             download::download_mmproj(choice.variant, &mmproj, model_source)
                 .map_err(|e| err::or_kind(e, AppError::Download))?;
         }
-        let mut translator = Translator::load_vision(&choice.path, &mmproj, args.gpu_layers)
-            .map_err(|e| err::or_kind(e, AppError::Model))?;
+        let mut translator =
+            Translator::load_vision(&choice.path, &mmproj, args.gpu_layers, args.threads)
+                .map_err(|e| err::or_kind(e, AppError::Model))?;
         let region = match (args.x, args.y, args.w, args.h) {
             (Some(x), Some(y), Some(w), Some(h)) => Some((x, y, w, h)),
             _ => None,
@@ -362,7 +368,7 @@ fn run() -> Result<()> {
     }
 
     ensure_model(&choice, model_source)?;
-    let translator = Translator::load(&choice.path, args.gpu_layers)
+    let translator = Translator::load(&choice.path, args.gpu_layers, args.threads)
         .map_err(|e| err::or_kind(e, AppError::Model))?;
     let target = args
         .to
