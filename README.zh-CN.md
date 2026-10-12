@@ -133,6 +133,14 @@ translate --log-level info "…"       # 显示 llama.cpp 内部日志（默认 
 
 3. 任意网页选中文字 → 右键「翻译选中内容」→ 选区旁浮层显示译文。
 
+打包版本：Release 提供 `qwen-translate-extension-*-chrome.crx` / `-chrome.zip` 与 `-firefox.zip`。Windows/macOS 上的 Chrome 不允许安装 Web Store 以外的 `.crx`，可解压 zip 后「加载已解压的扩展程序」，或通过企业策略（`ExtensionInstallForcelist` + 自建更新地址）部署 `.crx`；Linux 上可在开发者模式下把 `.crx` 拖进 `chrome://extensions`。自行打包：
+
+```bash
+scripts/pack-crx.py chrome path/to/key.pem qwen-translate.crx --zip qwen-translate.zip
+```
+
+私钥必须与 `chrome/manifest.json` 中的 `key` 对应（脚本会校验），否则打包出的扩展 ID 与宿主清单放行的 ID 不一致。若换用自己的私钥，需把其公钥写入 manifest 的 `key`，并同步修改宿主安装脚本中的 `CHROME_EXT_ID`。
+
 说明：
 - 扩展与翻译程序之间走 Native Messaging 连接，模型在两次翻译之间常驻内存，空闲 5 分钟后自动释放。
 - 浮层脚本只在右键点击时通过 `activeTab` 注入当前页面（所在 frame），不申请「读取和更改所有网站数据」权限。

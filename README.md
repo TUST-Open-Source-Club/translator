@@ -133,6 +133,14 @@ Right-click "翻译选中内容" (translate selection) on any page; a floating p
 
 3. Select text on any page → right-click "翻译选中内容" → the panel shows the translation.
 
+Packaged builds: releases ship `qwen-translate-extension-*-chrome.crx` / `-chrome.zip` and `-firefox.zip`. Chrome on Windows/macOS refuses to install `.crx` files from outside the Web Store, so there either use "Load unpacked" on the extracted zip or deploy the `.crx` through enterprise policy (`ExtensionInstallForcelist` with a self-hosted update URL); on Linux the `.crx` can be dragged onto `chrome://extensions` (developer mode). To pack one yourself:
+
+```bash
+scripts/pack-crx.py chrome path/to/key.pem qwen-translate.crx --zip qwen-translate.zip
+```
+
+The key must match the `key` in `chrome/manifest.json` (the script checks), otherwise the packed extension gets a different ID than the one the native host allows. If you use your own key, put its public part in the manifest `key` and update `CHROME_EXT_ID` in the host install scripts.
+
 Notes:
 - The extension talks to the binary over a native-messaging connection; the model stays loaded between translations and is released after 5 idle minutes.
 - The panel script is injected only into the page (frame) you right-click, via `activeTab` — no access to all sites is requested.
