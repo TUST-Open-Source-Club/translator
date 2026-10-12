@@ -13,6 +13,12 @@ elif [[ -x "$PROJECT_ROOT/target/release/translate" ]]; then
   BIN="$PROJECT_ROOT/target/release/translate"
 elif command -v translate >/dev/null 2>&1; then
   BIN="$(command -v translate)"
+elif [[ -x "$HOME/.local/bin/translate" ]]; then
+  # installed by scripts/install.sh, but ~/.local/bin is not in PATH
+  BIN="$HOME/.local/bin/translate"
+elif [[ -x "$PROJECT_ROOT/translate" ]]; then
+  # extracted release package
+  BIN="$PROJECT_ROOT/translate"
 else
   echo "translate binary not found; run cargo build --release first or pass the path" >&2
   exit 1
