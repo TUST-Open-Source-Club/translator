@@ -223,19 +223,23 @@ impl Translator {
             Some(s) => format!("from {} ", s.name()),
             None => String::new(),
         };
-        let prompt = format!(
+        let head = format!(
             "<|im_start|>system\n\
              You are a professional translator. Translate the user's text {from}into {}. \
              Preserve the original meaning, tone and formatting (including line breaks). \
              Output only the translation, without any explanation.<|im_end|>\n\
-             <|im_start|>user\n{}<|im_end|>\n\
-             <|im_start|>assistant\n<think>\n\n</think>\n\n",
-            target.name(),
-            text
+             <|im_start|>user\n",
+            target.name()
         );
+        let tail = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
 
+        // Only the template parses special tokens: markers such as "<|im_end|>" inside
+        // the user's text must stay plain text, or they end the turn early and let
+        // the text hijack the prompt.
         let vocab = self.model.vocab();
-        let tokens = vocab.tokenize(prompt.as_bytes(), true, true);
+        let mut tokens = vocab.tokenize(head.as_bytes(), true, true);
+        tokens.extend(vocab.tokenize(text.as_bytes(), false, false));
+        tokens.extend(vocab.tokenize(tail.as_bytes(), false, true));
         if tokens.len() > MAX_PROMPT_TOKENS {
             return Err(crate::err::usage(format!(
                 "text too long ({} tokens, limit {MAX_PROMPT_TOKENS})",
