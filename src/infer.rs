@@ -133,9 +133,16 @@ pub struct Translator {
     threads: i32,
 }
 
-/// Default inference threads: one per available core
+/// Default inference threads: one per available core. Phones use big.LITTLE SoCs
+/// where threads on the little cores hold the big ones back, so Android uses half
+/// of the cores (typically the big cluster).
 fn default_threads() -> i32 {
-    std::thread::available_parallelism().map_or(4, |n| n.get() as i32)
+    let cores = std::thread::available_parallelism().map_or(4, |n| n.get() as i32);
+    if cfg!(target_os = "android") {
+        (cores / 2).max(1)
+    } else {
+        cores
+    }
 }
 
 impl Translator {

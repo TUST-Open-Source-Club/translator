@@ -41,6 +41,22 @@ For tar.xz, extract and run `scripts/install.sh` (installs to `~/.local/bin`). T
 
 On Windows, extract the zip and run `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`: it installs `translate.exe` to `%LOCALAPPDATA%\Programs\qwen-translate` (added to the user PATH; no admin rights needed) and the bundled model, if any, to `%LOCALAPPDATA%\qwen-translate`. The extracted folder also works as-is (the model is found in `model\` next to the exe).
 
+### Android (Termux)
+
+The CLI runs on Android (aarch64) inside [Termux](https://termux.dev), using the `android-aarch64` release asset:
+
+```bash
+pkg install curl                                      # for the model auto-download
+tar xf qwen-translate-*-android-aarch64.tar.xz
+bash qwen-translate-*-android-aarch64/scripts/install.sh   # installs to $PREFIX/bin
+translate "I love programming"
+termux-clipboard-get | translate | termux-clipboard-set   # translate the clipboard (Termux:API)
+```
+
+- CPU only. By default half of the cores are used (the big cores on typical big.LITTLE SoCs); tune with `--threads`.
+- The default 2B model needs about 2 GB of free RAM; on low-memory phones use `--fast` (0.8B, about 1 GB).
+- The browser extensions are desktop-only: mobile browsers don't support native messaging.
+
 ### From source
 
 ```bash
@@ -61,6 +77,21 @@ cargo build --release
 ```
 
 Windows build deps: Visual Studio Build Tools (C++ workload), CMake and LLVM (`winget install Kitware.CMake LLVM.LLVM`).
+
+Android is cross-compiled on Linux with the [NDK](https://developer.android.com/ndk/downloads) (libc++ is linked statically, so the binary needs nothing beyond Android itself):
+
+```bash
+rustup target add aarch64-linux-android
+export ANDROID_NDK=/path/to/android-ndk ANDROID_API_LEVEL=24
+TC=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
+export CC_aarch64_linux_android=$TC/aarch64-linux-android24-clang \
+       CXX_aarch64_linux_android=$TC/aarch64-linux-android24-clang++ \
+       AR_aarch64_linux_android=$TC/llvm-ar \
+       CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TC/aarch64-linux-android24-clang
+cargo build --release --target aarch64-linux-android
+```
+
+For newer phones, `GGML_CPU_ARM_ARCH=armv8.2-a+dotprod` speeds up inference considerably, but the binary then no longer runs on older Cortex-A53/A73-class SoCs.
 
 Build deps: cmake, clang, a C++ compiler. Linux Vulkan builds also need SPIRV-Headers:
 

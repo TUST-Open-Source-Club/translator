@@ -41,6 +41,22 @@ tar.xz 解压后运行 `scripts/install.sh`（装到 `~/.local/bin`）。macOS �
 
 Windows：解压 zip 后运行 `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`，`translate.exe` 装到 `%LOCALAPPDATA%\Programs\qwen-translate` 并加入用户 PATH（无需管理员权限），包内模型（如有）装到 `%LOCALAPPDATA%\qwen-translate`。也可不安装，直接在解压目录使用（会自动找到 exe 同级 `model\` 中的模型）。
 
+### Android（Termux）
+
+CLI 可在 Android（aarch64）的 [Termux](https://termux.dev) 中运行，使用 Release 中的 `android-aarch64` 资产：
+
+```bash
+pkg install curl                                      # 自动下载模型需要 curl
+tar xf qwen-translate-*-android-aarch64.tar.xz
+bash qwen-translate-*-android-aarch64/scripts/install.sh   # 安装到 $PREFIX/bin
+translate "I love programming"
+termux-clipboard-get | translate | termux-clipboard-set   # 翻译剪贴板（需 Termux:API）
+```
+
+- 仅 CPU 推理。默认使用一半核心（常见大小核 SoC 上即大核），可用 `--threads` 调整。
+- 默认 2B 模型约需 2GB 空闲内存，内存较小的手机可用 `--fast`（0.8B，约 1GB）。
+- 浏览器扩展仅限桌面端：移动端浏览器不支持 Native Messaging。
+
 ### 从源码构建
 
 ```bash
@@ -61,6 +77,21 @@ cargo build --release
 ```
 
 Windows 构建依赖：Visual Studio Build Tools（C++ 工作负载）、CMake、LLVM（`winget install Kitware.CMake LLVM.LLVM`）。
+
+Android 在 Linux 上用 [NDK](https://developer.android.com/ndk/downloads) 交叉编译（libc++ 静态链接，二进制除 Android 系统外无其它依赖）：
+
+```bash
+rustup target add aarch64-linux-android
+export ANDROID_NDK=/path/to/android-ndk ANDROID_API_LEVEL=24
+TC=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
+export CC_aarch64_linux_android=$TC/aarch64-linux-android24-clang \
+       CXX_aarch64_linux_android=$TC/aarch64-linux-android24-clang++ \
+       AR_aarch64_linux_android=$TC/llvm-ar \
+       CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TC/aarch64-linux-android24-clang
+cargo build --release --target aarch64-linux-android
+```
+
+较新的手机可加 `GGML_CPU_ARM_ARCH=armv8.2-a+dotprod`，推理明显更快，但生成的二进制无法在 Cortex-A53/A73 一代的老 SoC 上运行。
 
 构建依赖：cmake、clang、C++ 编译器。Linux Vulkan 构建还需要 SPIRV-Headers：
 
