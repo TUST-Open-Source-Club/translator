@@ -3,17 +3,10 @@
   "name": "Qwen 本地翻译",
   "version": "0.1.0",
   "description": "右键翻译选中内容，由本地 Qwen3-0.6B（llama.cpp）提供，离线可用",
-  "permissions": ["contextMenus", "nativeMessaging"],
+  "permissions": ["contextMenus", "nativeMessaging", "activeTab", "scripting"],
   "background": {
     "scripts": ["background.js"]
   },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "css": ["panel.css"]
-    }
-  ],
   "browser_specific_settings": {
     "gecko": {
       "id": "qwen-translate@local",

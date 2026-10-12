@@ -16,6 +16,20 @@
     }
   }
 
+  // Selected text with line breaks intact, including inside text fields
+  function selectedText() {
+    const el = document.activeElement;
+    if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) {
+      try {
+        return el.value.slice(el.selectionStart, el.selectionEnd).trim();
+      } catch (e) {
+        // input types without a text selection
+      }
+    }
+    const sel = window.getSelection();
+    return sel ? sel.toString().trim() : "";
+  }
+
   function showPanel(id, text) {
     removePanel();
     currentId = id;
@@ -71,9 +85,11 @@
     });
   }
 
-  browser.runtime.onMessage.addListener((msg) => {
+  browser.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === "qt-show") {
-      showPanel(msg.id, msg.text);
+      const text = selectedText() || msg.text;
+      showPanel(msg.id, text);
+      sendResponse({ text });
     } else if (msg.type === "qt-result" && panel && msg.id === currentId) {
       const result = panel.querySelector(".qt-result");
       result.classList.remove("qt-loading");
