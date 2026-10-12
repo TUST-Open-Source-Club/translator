@@ -51,23 +51,27 @@ impl Lang {
 
     /// Rough language detection of the text (for picking the default target)
     pub fn detect(text: &str) -> Lang {
-        let (mut han, mut kana, mut hangul, mut cyrillic) = (false, false, false, false);
+        let (mut han, mut kana, mut hangul, mut cyrillic) = (0usize, 0usize, 0usize, 0usize);
         for c in text.chars() {
             match c as u32 {
-                0x3040..=0x30FF => kana = true,
-                0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF => han = true,
-                0xAC00..=0xD7AF | 0x1100..=0x11FF => hangul = true,
-                0x0400..=0x04FF => cyrillic = true,
+                // Hiragana / Katakana / phonetic extensions / half-width Katakana
+                0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F => kana += 1,
+                0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF => han += 1,
+                // Hangul syllables / Jamo / compatibility Jamo
+                0xAC00..=0xD7AF | 0x1100..=0x11FF | 0x3130..=0x318F => hangul += 1,
+                0x0400..=0x04FF => cyrillic += 1,
                 _ => {}
             }
         }
-        if han {
-            Lang::Zh
-        } else if kana {
+        // Japanese mixes kanji with kana, so kana must win over han; Chinese text
+        // may still borrow the odd kana (e.g. "の"), hence the ratio rather than any().
+        if kana > 0 && kana * 10 >= han {
             Lang::Ja
-        } else if hangul {
+        } else if hangul > 0 && hangul >= han {
             Lang::Ko
-        } else if cyrillic {
+        } else if han > 0 {
+            Lang::Zh
+        } else if cyrillic > 0 {
             Lang::Ru
         } else {
             Lang::En
@@ -372,5 +376,36 @@ fn strip_think(s: &str) -> &str {
     match s.rfind("</think>") {
         Some(end) => s[end + "</think>".len()..].trim(),
         None => s,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_languages() {
+        assert!(Lang::detect("今天天气很好") == Lang::Zh);
+        assert!(Lang::detect("I love programming") == Lang::En);
+        assert!(Lang::detect("Привет, мир") == Lang::Ru);
+        assert!(Lang::detect("안녕하세요") == Lang::Ko);
+        assert!(Lang::detect("ありがとう") == Lang::Ja);
+    }
+
+    #[test]
+    fn detect_japanese_with_kanji() {
+        // Kanji + kana used to be detected as Chinese (and translated into English)
+        assert!(Lang::detect("日本語を勉強しています") == Lang::Ja);
+        assert!(Lang::detect("東京都に住んでいます。") == Lang::Ja);
+    }
+
+    #[test]
+    fn detect_chinese_with_stray_kana() {
+        assert!(Lang::detect("这是我们学校の图书馆，里面有很多很多的书") == Lang::Zh);
+    }
+
+    #[test]
+    fn detect_korean_with_hanja() {
+        assert!(Lang::detect("大韓民國의 수도는 서울입니다") == Lang::Ko);
     }
 }
