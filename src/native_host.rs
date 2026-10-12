@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::infer::{default_target, Lang, Translator};
+use crate::infer::{default_target, Lang, TextSession, Translator};
 
 const MAX_MSG_LEN: u32 = 8 * 1024 * 1024;
 
@@ -44,17 +44,25 @@ pub fn run(load: impl Fn() -> Result<Translator>) -> Result<()> {
     Ok(())
 }
 
-/// Answer `first` and every following request with the loaded model
+/// Answer `first` and every following request with the loaded model. One inference
+/// context (KV cache) is allocated up front and reused by every request.
 fn serve(
     translator: &Translator,
     first: &[u8],
     input: &mut impl Read,
     output: &mut impl Write,
 ) -> Result<()> {
-    write_message(output, &handle(translator, first))?;
+    let mut session = match translator.text_session() {
+        Ok(s) => s,
+        Err(e) => {
+            write_message(output, &error(format!("{e:#}")))?;
+            return Err(e);
+        }
+    };
+    write_message(output, &handle(&mut session, first))?;
     while let Some(msg) = read_message(input)? {
         let response = match msg {
-            Ok(body) => handle(translator, &body),
+            Ok(body) => handle(&mut session, &body),
             Err(e) => error(e),
         };
         write_message(output, &response)?;
@@ -98,7 +106,7 @@ fn write_message(output: &mut impl Write, msg: &serde_json::Value) -> Result<()>
     Ok(())
 }
 
-fn handle(translator: &Translator, buf: &[u8]) -> serde_json::Value {
+fn handle(session: &mut TextSession, buf: &[u8]) -> serde_json::Value {
     let req = match serde_json::from_slice::<Request>(buf) {
         Ok(r) => r,
         Err(e) => return error(format!("invalid request: {e}")),
@@ -108,7 +116,7 @@ fn handle(translator: &Translator, buf: &[u8]) -> serde_json::Value {
         return error("empty text");
     }
     let detected = Lang::detect(text);
-    match translator.translate(text, None, default_target(detected), false) {
+    match session.translate(text, None, default_target(detected), false) {
         Ok(t) => json!({ "translation": t }),
         Err(e) => error(format!("{e:#}")),
     }
