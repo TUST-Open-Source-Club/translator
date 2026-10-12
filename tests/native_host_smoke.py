@@ -9,6 +9,7 @@ with the native messaging framing and checks the replies.
 """
 
 import json
+import os
 import struct
 import subprocess
 import sys
@@ -34,7 +35,8 @@ def exchange(binary, args, requests):
 
 
 def main():
-    binary = sys.argv[1]
+    # Absolute, native path: Windows' CreateProcess is picky about "./a/b.exe"
+    binary = os.path.abspath(sys.argv[1])
     replies = exchange(
         binary,
         [CHROME_ORIGIN, "--parent-window=0"],
