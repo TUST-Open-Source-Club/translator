@@ -1,16 +1,24 @@
 use std::io::{self, Read, Write};
 
 use anyhow::{Context, Result};
+use clap::ValueEnum;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::infer::{default_target, Lang, TextSession, Translator};
 
 const MAX_MSG_LEN: u32 = 8 * 1024 * 1024;
 
+/// Request body. Every field but `text` is optional, so older extensions keep working.
 #[derive(Deserialize)]
 struct Request {
     text: String,
+    /// Target language code (zh/en/ja/…); default: Chinese <-> English pair
+    #[serde(default)]
+    to: Option<String>,
+    /// Source language code; default: auto-detect
+    #[serde(default)]
+    from: Option<String>,
 }
 
 /// A request as read from the browser: the raw JSON body, or why it was rejected
@@ -70,7 +78,7 @@ fn serve(
     Ok(())
 }
 
-fn error(message: impl Into<String>) -> serde_json::Value {
+fn error(message: impl Into<String>) -> Value {
     json!({ "error": message.into() })
 }
 
@@ -98,7 +106,7 @@ fn read_message(input: &mut impl Read) -> Result<Option<Incoming>> {
     Ok(Some(Ok(buf)))
 }
 
-fn write_message(output: &mut impl Write, msg: &serde_json::Value) -> Result<()> {
+fn write_message(output: &mut impl Write, msg: &Value) -> Result<()> {
     let payload = serde_json::to_vec(msg)?;
     output.write_all(&(payload.len() as u32).to_ne_bytes())?;
     output.write_all(&payload)?;
@@ -106,18 +114,44 @@ fn write_message(output: &mut impl Write, msg: &serde_json::Value) -> Result<()>
     Ok(())
 }
 
-fn handle(session: &mut TextSession, buf: &[u8]) -> serde_json::Value {
-    let req = match serde_json::from_slice::<Request>(buf) {
-        Ok(r) => r,
+fn handle(session: &mut TextSession, buf: &[u8]) -> Value {
+    let value: Value = match serde_json::from_slice(buf) {
+        Ok(v) => v,
         Err(e) => return error(format!("invalid request: {e}")),
     };
+    let mut response = match translate(session, &value) {
+        Ok(t) => json!({ "translation": t }),
+        Err(e) => error(e),
+    };
+    // Echo the caller's request id so replies can be matched to requests
+    if let Some(id) = value.get("id") {
+        response["id"] = id.clone();
+    }
+    response
+}
+
+fn translate(session: &mut TextSession, value: &Value) -> std::result::Result<String, String> {
+    let req = Request::deserialize(value).map_err(|e| format!("invalid request: {e}"))?;
     let text = req.text.trim();
     if text.is_empty() {
-        return error("empty text");
+        return Err("empty text".into());
     }
-    let detected = Lang::detect(text);
-    match session.translate(text, None, default_target(detected), false) {
-        Ok(t) => json!({ "translation": t }),
-        Err(e) => error(format!("{e:#}")),
+    let source = parse_lang(req.from.as_deref())?;
+    let target = match parse_lang(req.to.as_deref())? {
+        Some(t) => t,
+        None => default_target(source.unwrap_or_else(|| Lang::detect(text))),
+    };
+    session
+        .translate(text, source, target, false)
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Language code from a request; absent or "auto" means automatic
+fn parse_lang(code: Option<&str>) -> std::result::Result<Option<Lang>, String> {
+    match code {
+        None | Some("" | "auto") => Ok(None),
+        Some(c) => <Lang as ValueEnum>::from_str(c, true)
+            .map(Some)
+            .map_err(|_| format!("unsupported language: {c}")),
     }
 }
