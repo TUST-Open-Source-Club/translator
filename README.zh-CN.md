@@ -95,14 +95,16 @@ translate --log-level info "…"       # 显示 llama.cpp 内部日志（默认 
 ```
 
 参数与 stdin 同时存在时优先用参数；两者都没有时打印帮助。解码为贪心策略（确定性输出）。
+stdin 支持 UTF-8（可带 BOM）与带 BOM 的 UTF-16；Windows 下控制台代码页编码的输入（如 GBK 环境的 cmd 中 `echo 你好 | translate`）也能正确识别。
 模型运行在非思考模式（Qwen3.5 本身即默认非思考，不支持 /no_think 软开关）。
 
 模型查找顺序（命中即用）：
 
 1. `--model` / `QWEN_TRANSLATE_MODEL`（可为变体关键字 fast/default/quality，或显式 GGUF 路径；显式路径缺失则报错，不自动下载）
-2. 用户数据目录：Linux `~/.local/share/qwen-translate/`，macOS `~/Library/Application Support/qwen-translate/`
-3. 系统目录：`/usr/local/share/qwen-translate/`、`/usr/share/qwen-translate/`（macOS 额外含 Homebrew 前缀 `/opt/homebrew/share/qwen-translate/`）——带模型的安装包就装在这里
-4. 都没有 → 自动下载到用户数据目录（默认 ModelScope）
+2. 用户数据目录：Linux `~/.local/share/qwen-translate/`，macOS `~/Library/Application Support/qwen-translate/`，Windows `%LOCALAPPDATA%\qwen-translate\`
+3. 可执行文件同级的 `model/` 目录（解压 `-with-model` 包后免安装直接使用）
+4. 系统目录：`/usr/local/share/qwen-translate/`、`/usr/share/qwen-translate/`（macOS 额外含 Homebrew 前缀 `/opt/homebrew/share/qwen-translate/`；Windows 为 `%ProgramData%\qwen-translate\`）——带模型的安装包就装在这里
+5. 都没有 → 自动下载到用户数据目录（默认 ModelScope）
 
 手动预下载/换变体：`scripts/download-model.sh`（支持 `VARIANT=default/fast/quality`、`MODEL_SOURCE` 环境变量）。
 

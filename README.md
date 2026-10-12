@@ -95,14 +95,16 @@ translate --log-level info "…"       # llama.cpp internals (default: warn, qui
 ```
 
 Arguments win over stdin; with neither, you get the help text. Decoding is greedy (deterministic).
+stdin may be UTF-8 (with or without BOM) or UTF-16 with BOM; on Windows, input in the console code page (e.g. `echo 你好 | translate` in cmd.exe with GBK) is decoded too.
 The model runs in non-thinking mode (Qwen3.5-0.8B is non-thinking by default; `/no_think` is not supported).
 
 Model lookup order (first hit wins):
 
 1. `--model` / `QWEN_TRANSLATE_MODEL` — a variant keyword (`fast`/`default`/`quality`) or an explicit GGUF path (explicit paths are never auto-downloaded; a missing file is an error)
-2. User data dir: `~/.local/share/qwen-translate/` (Linux), `~/Library/Application Support/qwen-translate/` (macOS)
-3. System dirs: `/usr/local/share/qwen-translate/`, `/usr/share/qwen-translate/` (plus `/opt/homebrew/share/qwen-translate/` on macOS) — where model-bundled packages install
-4. Otherwise auto-downloads to the user data dir (ModelScope by default)
+2. User data dir: `~/.local/share/qwen-translate/` (Linux), `~/Library/Application Support/qwen-translate/` (macOS), `%LOCALAPPDATA%\qwen-translate\` (Windows)
+3. `model/` next to the executable (portable use of an extracted `-with-model` package)
+4. System dirs: `/usr/local/share/qwen-translate/`, `/usr/share/qwen-translate/` (plus `/opt/homebrew/share/qwen-translate/` on macOS; `%ProgramData%\qwen-translate\` on Windows) — where model-bundled packages install
+5. Otherwise auto-downloads to the user data dir (ModelScope by default)
 
 Pre-download or switch quants with `scripts/download-model.sh` (`MODEL_SOURCE` / `MODEL_REPO` / `MODEL_NAME` env overrides).
 

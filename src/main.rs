@@ -17,6 +17,8 @@ use err::AppError;
 use infer::{default_target, Lang, SourceLang, Translator};
 
 const ENV_MODEL: &str = "QWEN_TRANSLATE_MODEL";
+/// Add-on ID of the Firefox extension (firefox/manifest.json)
+const FIREFOX_ADDON_ID: &str = "qwen-translate@local";
 
 #[derive(Parser)]
 #[command(
@@ -28,9 +30,9 @@ const ENV_MODEL: &str = "QWEN_TRANSLATE_MODEL";
         Input: command-line arguments take precedence, otherwise stdin is read (pipe-friendly).\n\
         Image translation: pass an image via --image; -x/-y/-w/-h crop the region to translate.\n\
         Models: 2B by default; --fast/--quality (or --model fast/quality) switch to 0.8B/4B.\n\
-        Model lookup order: --model / env var > user data dir > /usr/local/share, /usr/share\n\
-        (on macOS also the Homebrew prefix /opt/homebrew/share); auto-downloads to the user\n\
-        data dir when not found anywhere.\n\
+        Model lookup order: --model / env var > user data dir > model/ next to the executable\n\
+        > /usr/local/share, /usr/share (macOS also /opt/homebrew/share; Windows %ProgramData%);\n\
+        auto-downloads to the user data dir when not found anywhere.\n\
         stdout carries only results; logs and errors go to stderr.\n\n\
         Exit codes: 0 ok, 1 runtime, 2 usage, 3 model, 4 download, 5 unsupported.\n\n\
         Examples:\n  \
@@ -132,28 +134,46 @@ struct Args {
 }
 
 fn data_dir_path(file: &str) -> PathBuf {
-    dirs::data_dir()
+    // Local (non-roaming) app data: %LOCALAPPDATA% on Windows, so ~700MB of model
+    // files don't travel with roaming profiles; the same as data_dir() elsewhere
+    dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("qwen-translate")
         .join(file)
 }
 
-/// System-wide lookup paths (model-bundled system packages install here)
+/// Portable and system-wide lookup paths (model-bundled packages install here)
 fn system_paths(file: &str) -> Vec<PathBuf> {
-    let dirs: Vec<&str> = if cfg!(target_os = "macos") {
+    // Portable layout: model/ next to the executable (Windows zip, extracted tarballs)
+    let mut dirs: Vec<PathBuf> = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("model")))
+        .into_iter()
+        .collect();
+    if cfg!(windows) {
+        dirs.extend(
+            std::env::var_os("ProgramData").map(|d| PathBuf::from(d).join("qwen-translate")),
+        );
+    } else if cfg!(target_os = "macos") {
         // Apple Silicon Homebrew / Intel Homebrew & manual installs / system packages
-        vec![
-            "/opt/homebrew/share/qwen-translate",
-            "/usr/local/share/qwen-translate",
-            "/usr/share/qwen-translate",
-        ]
+        dirs.extend(
+            [
+                "/opt/homebrew/share/qwen-translate",
+                "/usr/local/share/qwen-translate",
+                "/usr/share/qwen-translate",
+            ]
+            .map(PathBuf::from),
+        );
     } else {
-        vec![
-            "/usr/local/share/qwen-translate",
-            "/usr/share/qwen-translate",
-        ]
-    };
-    dirs.into_iter().map(|d| PathBuf::from(d).join(file)).collect()
+        dirs.extend(
+            [
+                "/usr/local/share/qwen-translate",
+                "/usr/share/qwen-translate",
+            ]
+            .map(PathBuf::from),
+        );
+    }
+    dirs.into_iter().map(|d| d.join(file)).collect()
 }
 
 /// Lookup order: user data dir > system dirs; returns the user data dir path
@@ -263,8 +283,37 @@ fn print_result(out: &str, streamed: bool) -> Result<()> {
     }
 }
 
+/// Whether a browser started us as its native messaging host. Host manifests can
+/// only name an executable, and on Windows there is no wrapper script to add
+/// --native-host, so recognise the arguments browsers pass instead: Chromium
+/// browsers pass the caller's origin (plus --parent-window=N on Windows), Firefox
+/// passes the host manifest path and the add-on ID.
+fn is_browser_launch(args: &[String]) -> bool {
+    let args: Vec<&str> = args
+        .iter()
+        .map(String::as_str)
+        .filter(|a| *a != "--native-host")
+        .collect();
+    match args.as_slice() {
+        [origin, rest @ ..] if origin.starts_with("chrome-extension://") => {
+            rest.iter().all(|a| a.starts_with("--parent-window="))
+        }
+        [manifest, id, ..] => manifest.ends_with(".json") && *id == FIREFOX_ADDON_ID,
+        _ => false,
+    }
+}
+
 fn run() -> Result<()> {
-    let args = Args::parse();
+    let raw: Vec<String> = std::env::args_os()
+        .skip(1)
+        .filter_map(|a| a.into_string().ok())
+        .collect();
+    let args = if is_browser_launch(&raw) {
+        // Browser-supplied arguments are not ours; options come from env vars
+        Args::parse_from(["translate", "--native-host"])
+    } else {
+        Args::parse()
+    };
     logging::init(args.log_level);
 
     // --model-source wins over --huggingface; default is ModelScope
@@ -384,5 +433,33 @@ fn main() -> ExitCode {
             eprintln!("error: {e:#}");
             ExitCode::from(err::exit_code(&e))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_browser_launch;
+
+    fn launch(args: &[&str]) -> bool {
+        is_browser_launch(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn browser_launches_are_recognised() {
+        let chrome = "chrome-extension://bfkmmaobjaldoelkdphajjagomjehbpc/";
+        assert!(launch(&[chrome]));
+        assert!(launch(&[chrome, "--parent-window=0"]));
+        assert!(launch(&["--native-host", chrome]));
+        let manifest = r"C:\Users\me\AppData\Local\qwen-translate\native-host-firefox.json";
+        assert!(launch(&[manifest, "qwen-translate@local"]));
+    }
+
+    #[test]
+    fn normal_invocations_are_not_browser_launches() {
+        assert!(!launch(&[]));
+        assert!(!launch(&["hello", "world"]));
+        assert!(!launch(&["--to", "ja", "chrome-extension://x/"]));
+        assert!(!launch(&["chrome-extension://x/", "and more text"]));
+        assert!(!launch(&["config.json", "qwen-translate@local!"]));
     }
 }

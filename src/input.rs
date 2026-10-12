@@ -28,8 +28,60 @@ fn utf16(bytes: &[u8], from_bytes: fn([u8; 2]) -> u16) -> String {
 }
 
 fn not_utf8(bytes: Vec<u8>) -> String {
+    #[cfg(windows)]
+    if let Some(text) = windows::decode_code_page(&bytes) {
+        return text;
+    }
     eprintln!("warning: input is not valid UTF-8; invalid bytes were replaced");
     String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// cmd.exe pipes (`echo 你好 | translate`) and legacy "ANSI" text files use the
+/// console / system code page (e.g. GBK on Chinese Windows), not UTF-8
+#[cfg(windows)]
+mod windows {
+    const CP_UTF8: u32 = 65001;
+    const MB_ERR_INVALID_CHARS: u32 = 0x08;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetConsoleOutputCP() -> u32;
+        fn GetACP() -> u32;
+        fn MultiByteToWideChar(
+            code_page: u32,
+            flags: u32,
+            src: *const u8,
+            src_len: i32,
+            dst: *mut u16,
+            dst_len: i32,
+        ) -> i32;
+    }
+
+    pub fn decode_code_page(bytes: &[u8]) -> Option<String> {
+        // 0 when there is no console (e.g. launched by a browser): use the ANSI code page
+        let cp = match unsafe { GetConsoleOutputCP() } {
+            0 => unsafe { GetACP() },
+            cp => cp,
+        };
+        if cp == CP_UTF8 {
+            return None;
+        }
+        let len = i32::try_from(bytes.len()).ok()?;
+        let convert = |dst: *mut u16, dst_len: i32| unsafe {
+            MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, bytes.as_ptr(), len, dst, dst_len)
+        };
+        let n = convert(std::ptr::null_mut(), 0);
+        if n <= 0 {
+            return None;
+        }
+        let mut wide = vec![0u16; n as usize];
+        let n = convert(wide.as_mut_ptr(), n);
+        if n <= 0 {
+            return None;
+        }
+        wide.truncate(n as usize);
+        Some(String::from_utf16_lossy(&wide))
+    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 
@@ -107,6 +107,19 @@ fn curl(out: &Path, url: &str, resume: bool) -> Result<std::process::ExitStatus>
         .args(["--retry", "3", "--retry-delay", "2"]);
     if resume {
         cmd.args(["-C", "-"]);
+    }
+    // stdout may be the native messaging pipe: nothing else must write to it
+    cmd.stdout(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::io::IsTerminal;
+        use std::os::windows::process::CommandExt;
+        // Without a console (started by a browser) Windows would pop up a new
+        // console window for curl.exe
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        if !std::io::stderr().is_terminal() {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
     }
     cmd.arg("-o")
         .arg(out)
