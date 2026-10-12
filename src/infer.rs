@@ -2,7 +2,7 @@ use std::io::Write;
 use std::num::NonZeroU32;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -13,11 +13,16 @@ use llama_cpp_2::mtmd::{
     mtmd_default_marker, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText,
 };
 use llama_cpp_2::sampling::LlamaSampler;
+use llama_cpp_2::token::LlamaToken;
 
-const N_CTX: u32 = 4096;
+const N_CTX: u32 = 8192;
 /// Larger context for vision: image token count grows with resolution
 const N_CTX_VISION: u32 = 16384;
-const MAX_PROMPT_TOKENS: usize = 3700;
+/// Max tokens per decode batch
+const N_BATCH: usize = 512;
+/// Long input is translated in chunks of at most this many source tokens, so that
+/// prompt + translation (up to ~2x the source) always fit in N_CTX
+const CHUNK_TOKENS: usize = 2048;
 
 /// Supported languages
 #[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -171,7 +176,7 @@ impl Translator {
             .unwrap_or(4);
         LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(n_ctx))
-            .with_n_batch(512)
+            .with_n_batch(N_BATCH as u32)
             .with_n_threads(threads)
             .with_n_threads_batch(threads)
     }
@@ -186,7 +191,7 @@ impl Translator {
     ) -> Result<String> {
         let vocab = self.model.vocab();
         let mut sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
-        let mut batch = LlamaBatch::new(512, 1);
+        let mut batch = LlamaBatch::new(1, 1);
         let mut out_bytes: Vec<u8> = Vec::new();
         let mut pos = start_pos;
         let stdout = std::io::stdout();
@@ -212,6 +217,7 @@ impl Translator {
         Ok(strip_think(&raw).to_string())
     }
 
+    /// One-shot convenience wrapper around [`TextSession::translate`]
     pub fn translate(
         &self,
         text: &str,
@@ -219,6 +225,22 @@ impl Translator {
         target: Lang,
         stream: bool,
     ) -> Result<String> {
+        self.text_session()?.translate(text, source, target, stream)
+    }
+
+    /// A text-translation context that can be reused across requests
+    pub fn text_session(&self) -> Result<TextSession<'_>> {
+        let ctx = self
+            .model
+            .new_context(&self.backend, self.ctx_params(N_CTX))?;
+        Ok(TextSession {
+            translator: self,
+            ctx,
+        })
+    }
+
+    /// Chat-template tokens for one translation request
+    fn prompt_tokens(&self, text: &str, source: Option<Lang>, target: Lang) -> Vec<LlamaToken> {
         let from = match source {
             Some(s) => format!("from {} ", s.name()),
             None => String::new(),
@@ -240,32 +262,7 @@ impl Translator {
         let mut tokens = vocab.tokenize(head.as_bytes(), true, true);
         tokens.extend(vocab.tokenize(text.as_bytes(), false, false));
         tokens.extend(vocab.tokenize(tail.as_bytes(), false, true));
-        if tokens.len() > MAX_PROMPT_TOKENS {
-            return Err(crate::err::usage(format!(
-                "text too long ({} tokens, limit {MAX_PROMPT_TOKENS})",
-                tokens.len()
-            )));
-        }
-
-        let mut ctx = self.model.new_context(&self.backend, self.ctx_params(N_CTX))?;
-        // Chunked prefill: a single decode batch may not exceed n_batch,
-        // and positions must be absolute across chunks.
-        let n_batch = 512usize;
-        let mut batch = LlamaBatch::new(n_batch, 1);
-        let mut pos = 0usize;
-        while pos < tokens.len() {
-            let end = (pos + n_batch).min(tokens.len());
-            batch.clear();
-            for (i, t) in tokens[pos..end].iter().enumerate() {
-                let p = pos + i;
-                batch.add(*t, p as i32, &[0], p == tokens.len() - 1)?;
-            }
-            ctx.decode(&mut batch).context("failed to process prompt")?;
-            pos = end;
-        }
-
-        let max_out = (tokens.len() * 2 + 128).min(2048);
-        self.generate(&mut ctx, tokens.len() as i32, max_out, stream)
+        tokens
     }
 
     /// Image translation (direct multimodal translation, NOT OCR). region = (x, y, w, h), None = whole image.
@@ -370,12 +367,186 @@ impl Translator {
                 .as_mut()
                 .context("mmproj not loaded; image translation unavailable")?;
             chunks
-                .eval_chunks(mtmd, &mut ctx, 0, 0, 512, true)
+                .eval_chunks(mtmd, &mut ctx, 0, 0, N_BATCH as i32, true)
                 .map_err(|e| anyhow::anyhow!("failed to encode image: {e}"))?
         };
 
         self.generate(&mut ctx, n_past, max_tokens, stream)
     }
+}
+
+/// Text translation context (KV cache) bound to a loaded model. Creating it
+/// allocates the KV cache, so long-lived callers keep one and reuse it.
+pub struct TextSession<'a> {
+    translator: &'a Translator,
+    ctx: LlamaContext<'a>,
+}
+
+impl TextSession<'_> {
+    /// Translate text of any length. Input longer than [`CHUNK_TOKENS`] is split at
+    /// paragraph / line / sentence boundaries and translated chunk by chunk, keeping
+    /// the whitespace between chunks, so prompt + output always fit in the context.
+    /// `stream` prints the translation to stdout as it is generated.
+    pub fn translate(
+        &mut self,
+        text: &str,
+        source: Option<Lang>,
+        target: Lang,
+        stream: bool,
+    ) -> Result<String> {
+        let translator = self.translator;
+        let vocab = translator.model.vocab();
+        let count = |s: &str| vocab.tokenize(s.as_bytes(), false, false).len();
+        // Whitespace between chunks is part of the output (streamed as well)
+        let emit = |out: &mut String, s: &str| {
+            out.push_str(s);
+            if stream && !s.is_empty() {
+                let mut stdout = std::io::stdout().lock();
+                let _ = stdout.write_all(s.as_bytes());
+                let _ = stdout.flush();
+            }
+        };
+
+        let mut out = String::with_capacity(text.len() * 2);
+        for chunk in split_chunks(text, CHUNK_TOKENS, &count) {
+            let body = chunk.trim();
+            if body.is_empty() {
+                emit(&mut out, chunk);
+                continue;
+            }
+            let lead = chunk.len() - chunk.trim_start().len();
+            emit(&mut out, &chunk[..lead]);
+            out.push_str(&self.translate_chunk(body, source, target, stream)?);
+            emit(&mut out, &chunk[lead + body.len()..]);
+        }
+        Ok(out)
+    }
+
+    fn translate_chunk(
+        &mut self,
+        text: &str,
+        source: Option<Lang>,
+        target: Lang,
+        stream: bool,
+    ) -> Result<String> {
+        let translator = self.translator;
+        let tokens = translator.prompt_tokens(text, source, target);
+        let n_ctx = self.ctx.n_ctx() as usize;
+        // split_chunks keeps chunks far below this; guard against overflowing anyway
+        if tokens.len() + 128 > n_ctx {
+            bail!("prompt too long ({} tokens, context {n_ctx})", tokens.len());
+        }
+
+        self.ctx.clear_kv_cache();
+        // Chunked prefill: a single decode batch may not exceed n_batch,
+        // and positions must be absolute across chunks.
+        let mut batch = LlamaBatch::new(N_BATCH, 1);
+        let mut pos = 0usize;
+        while pos < tokens.len() {
+            let end = (pos + N_BATCH).min(tokens.len());
+            batch.clear();
+            for (i, t) in tokens[pos..end].iter().enumerate() {
+                let p = pos + i;
+                batch.add(*t, p as i32, &[0], p == tokens.len() - 1)?;
+            }
+            self.ctx
+                .decode(&mut batch)
+                .context("failed to process prompt")?;
+            pos = end;
+        }
+
+        // Output budget: generous for verbose target languages, but never past the
+        // end of the context window (decoding there fails and loses everything).
+        let max_out = (tokens.len() * 2 + 128).min(n_ctx - tokens.len());
+        translator.generate(&mut self.ctx, tokens.len() as i32, max_out, stream)
+    }
+}
+
+/// Split `text` into consecutive slices of at most `limit` tokens (as measured by
+/// `count`), preferring blank lines (paragraphs), then line breaks, then sentence
+/// ends, then the middle of the text. Concatenating the slices yields `text` exactly.
+fn split_chunks<'t>(text: &'t str, limit: usize, count: &dyn Fn(&str) -> usize) -> Vec<&'t str> {
+    let mut out = Vec::new();
+    pack(text, 0, limit, count, &mut out);
+    out
+}
+
+fn pack<'t>(
+    text: &'t str,
+    level: u8,
+    limit: usize,
+    count: &dyn Fn(&str) -> usize,
+    out: &mut Vec<&'t str>,
+) {
+    if text.is_empty() {
+        return;
+    }
+    if count(text) <= limit {
+        out.push(text);
+        return;
+    }
+    let pieces: Vec<&str> = match level {
+        0 => text.split_inclusive("\n\n").collect(),
+        1 => text.split_inclusive('\n').collect(),
+        2 => sentences(text),
+        _ => {
+            // Last resort for a single huge "sentence": halve at a char boundary
+            let mid = text
+                .char_indices()
+                .nth(text.chars().count() / 2)
+                .map_or(text.len(), |(i, _)| i);
+            pack(&text[..mid], level, limit, count, out);
+            pack(&text[mid..], level, limit, count, out);
+            return;
+        }
+    };
+
+    // Greedily merge consecutive pieces into chunks of at most `limit` tokens;
+    // pieces that are too big on their own are split at the next level.
+    let (mut start, mut end, mut used) = (0usize, 0usize, 0usize);
+    for piece in pieces {
+        let n = count(piece);
+        if n > limit {
+            if end > start {
+                out.push(&text[start..end]);
+            }
+            pack(&text[end..end + piece.len()], level + 1, limit, count, out);
+            end += piece.len();
+            (start, used) = (end, 0);
+            continue;
+        }
+        if used + n > limit && end > start {
+            out.push(&text[start..end]);
+            (start, used) = (end, 0);
+        }
+        end += piece.len();
+        used += n;
+    }
+    if end > start {
+        out.push(&text[start..end]);
+    }
+}
+
+/// Split after sentence-ending punctuation (CJK full-width marks, or ASCII marks
+/// followed by whitespace so that "3.14" and "e.g." stay intact)
+fn sentences(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        let next = chars.peek().map(|&(_, n)| n);
+        let ends = matches!(c, '。' | '！' | '？' | '；')
+            || (matches!(c, '.' | '!' | '?' | ';') && next.is_some_and(char::is_whitespace));
+        if ends {
+            let end = i + c.len_utf8();
+            out.push(&text[start..end]);
+            start = end;
+        }
+    }
+    if start < text.len() {
+        out.push(&text[start..]);
+    }
+    out
 }
 
 /// Fallback: strip <think>...</think> blocks
@@ -410,6 +581,52 @@ mod tests {
     #[test]
     fn detect_chinese_with_stray_kana() {
         assert!(Lang::detect("这是我们学校の图书馆，里面有很多很多的书") == Lang::Zh);
+    }
+
+    /// Test tokenizer stand-in: one token per char
+    fn chars(s: &str) -> usize {
+        s.chars().count()
+    }
+
+    fn check_chunks(text: &str, limit: usize) -> Vec<&str> {
+        let chunks = split_chunks(text, limit, &chars);
+        assert_eq!(chunks.concat(), text);
+        assert!(chunks.iter().all(|c| !c.is_empty() && chars(c) <= limit));
+        chunks
+    }
+
+    #[test]
+    fn short_text_is_one_chunk() {
+        assert_eq!(check_chunks("hello world", 100), vec!["hello world"]);
+    }
+
+    #[test]
+    fn chunks_prefer_paragraphs() {
+        let text = "aaaa\nbbbb\n\ncccc\ndd\n";
+        assert_eq!(check_chunks(text, 12), vec!["aaaa\nbbbb\n\n", "cccc\ndd\n"]);
+    }
+
+    #[test]
+    fn long_paragraph_splits_at_lines() {
+        let text = "aaaa\nbbbb\ncccc\n";
+        assert_eq!(check_chunks(text, 10), vec!["aaaa\nbbbb\n", "cccc\n"]);
+    }
+
+    #[test]
+    fn long_line_splits_at_sentences() {
+        let text = "One two. Three four! 五六。 Seven 3.14 eight";
+        let chunks = check_chunks(text, 20);
+        assert_eq!(
+            chunks,
+            vec!["One two. Three four!", " 五六。", " Seven 3.14 eight"]
+        );
+    }
+
+    #[test]
+    fn huge_sentence_is_halved() {
+        let text = "x".repeat(100) + "中文".repeat(50).as_str();
+        let chunks = check_chunks(&text, 16);
+        assert!(chunks.len() >= 13);
     }
 
     #[test]
