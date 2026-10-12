@@ -79,6 +79,18 @@ cargo build --release --features metal
 cargo build --release
 ```
 
+Build deps: cmake, clang, a C++ compiler. Linux Vulkan builds also need SPIRV-Headers:
+
+```bash
+# Debian/Ubuntu: sudo apt install spirv-headers libvulkan-dev glslang-tools glslc
+# Arch:          sudo pacman -S spirv-headers
+# or a sudo-less local install:
+git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers /tmp/spirv-headers
+cmake -S /tmp/spirv-headers -B /tmp/spirv-headers/build -DCMAKE_INSTALL_PREFIX=$HOME/.local
+cmake --build /tmp/spirv-headers/build --target install
+CMAKE_PREFIX_PATH=$HOME/.local CPATH=$HOME/.local/include cargo build --release --features vulkan
+```
+
 Windows build deps: Visual Studio Build Tools (C++ workload), CMake and LLVM (`winget install Kitware.CMake LLVM.LLVM`).
 
 Android is cross-compiled on Linux with the [NDK](https://developer.android.com/ndk/downloads) (libc++ is linked statically, so the binary needs nothing beyond Android itself):
@@ -95,18 +107,6 @@ cargo build --release --target aarch64-linux-android
 ```
 
 For newer phones, `GGML_CPU_ARM_ARCH=armv8.2-a+dotprod` speeds up inference considerably, but the binary then no longer runs on older Cortex-A53/A73-class SoCs.
-
-Build deps: cmake, clang, a C++ compiler. Linux Vulkan builds also need SPIRV-Headers:
-
-```bash
-# Debian/Ubuntu: sudo apt install spirv-headers libvulkan-dev glslang-tools glslc
-# Arch:          sudo pacman -S spirv-headers
-# or a sudo-less local install:
-git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers /tmp/spirv-headers
-cmake -S /tmp/spirv-headers -B /tmp/spirv-headers/build -DCMAKE_INSTALL_PREFIX=$HOME/.local
-cmake --build /tmp/spirv-headers/build --target install
-CMAKE_PREFIX_PATH=$HOME/.local CPATH=$HOME/.local/include cargo build --release --features vulkan
-```
 
 ## Usage
 
@@ -197,6 +197,7 @@ Notes:
 - Temporarily loaded Firefox add-ons vanish on browser restart; reload via about:debugging, or use `web-ext run`.
 - Restricted pages (`about:*`, `chrome://*`, extension stores, …) can't be scripted — a browser limitation.
 - Firefox's built-in translation exposes no API for third-party engines, hence the context-menu + panel approach.
+- Host protocol (usable from any native-messaging client): request `{"id": 1, "text": "…", "to": "ja", "from": "auto"}` (only `text` is required) → reply `{"id": 1, "translation": "…"}` or `{"id": 1, "error": "…"}`.
 
 ## CI/CD
 
@@ -225,8 +226,9 @@ Remove-Item -Recurse "$env:LOCALAPPDATA\Programs\qwen-translate", "$env:LOCALAPP
 
 | Problem | Fix |
 | --- | --- |
-| Auto-download fails | Run `scripts/download-model.sh` manually, or `--model-source huggingface` |
-| Panel says the translator can't start | Re-run `scripts/install-native-host.sh`; check the binary path |
+| Auto-download fails | Rerun to resume the partial download; or run `scripts/download-model.sh`, or use `--model-source huggingface` |
+| Panel says the translator can't start / "native messaging host not found" | Re-run `scripts/install-native-host.sh` (Windows: `scripts\install-native-host.ps1`); check the binary path; Chrome needs the extension ID `bfkmmaobjaldoelkdphajjagomjehbpc` (load `chrome/` unchanged) |
+| Garbled Chinese in PowerShell | Set the console encodings to UTF-8, see "Usage" |
 | Vulkan build: `SPIRV-Headers` missing | See "From source" above |
 | GPU not used | Runtime CPU fallback is normal; check `vulkaninfo --summary`; CUDA builds need the toolkit |
 

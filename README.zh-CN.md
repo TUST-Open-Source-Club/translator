@@ -79,6 +79,18 @@ cargo build --release --features metal
 cargo build --release
 ```
 
+构建依赖：cmake、clang、C++ 编译器。Linux Vulkan 构建还需要 SPIRV-Headers：
+
+```bash
+# Debian/Ubuntu: sudo apt install spirv-headers libvulkan-dev glslang-tools glslc
+# Arch:          sudo pacman -S spirv-headers
+# 或无 sudo 本地安装：
+git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers /tmp/spirv-headers
+cmake -S /tmp/spirv-headers -B /tmp/spirv-headers/build -DCMAKE_INSTALL_PREFIX=$HOME/.local
+cmake --build /tmp/spirv-headers/build --target install
+CMAKE_PREFIX_PATH=$HOME/.local CPATH=$HOME/.local/include cargo build --release --features vulkan
+```
+
 Windows 构建依赖：Visual Studio Build Tools（C++ 工作负载）、CMake、LLVM（`winget install Kitware.CMake LLVM.LLVM`）。
 
 Android 在 Linux 上用 [NDK](https://developer.android.com/ndk/downloads) 交叉编译（libc++ 静态链接，二进制除 Android 系统外无其它依赖）：
@@ -95,18 +107,6 @@ cargo build --release --target aarch64-linux-android
 ```
 
 较新的手机可加 `GGML_CPU_ARM_ARCH=armv8.2-a+dotprod`，推理明显更快，但生成的二进制无法在 Cortex-A53/A73 一代的老 SoC 上运行。
-
-构建依赖：cmake、clang、C++ 编译器。Linux Vulkan 构建还需要 SPIRV-Headers：
-
-```bash
-# Debian/Ubuntu: sudo apt install spirv-headers libvulkan-dev glslang-tools glslc
-# Arch:          sudo pacman -S spirv-headers
-# 或无 sudo 本地安装：
-git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers /tmp/spirv-headers
-cmake -S /tmp/spirv-headers -B /tmp/spirv-headers/build -DCMAKE_INSTALL_PREFIX=$HOME/.local
-cmake --build /tmp/spirv-headers/build --target install
-CMAKE_PREFIX_PATH=$HOME/.local CPATH=$HOME/.local/include cargo build --release --features vulkan
-```
 
 ## 使用
 
@@ -197,6 +197,7 @@ scripts/pack-crx.py chrome path/to/key.pem qwen-translate.crx --zip qwen-transla
 - Firefox 重启后临时加载的扩展会消失，需重新在 about:debugging 载入；长期使用可打包签名或用 `web-ext run`。
 - 受限页面（`about:*`、`chrome://*`、扩展商店等）无法注入浮层，属于浏览器限制。
 - Firefox 内置翻译功能不开放第三方翻译引擎 API，故采用右键菜单 + 浮层方案。
+- 宿主协议（任何 native messaging 客户端都可调用）：请求 `{"id": 1, "text": "…", "to": "ja", "from": "auto"}`（仅 `text` 必填）→ 回复 `{"id": 1, "translation": "…"}` 或 `{"id": 1, "error": "…"}`。
 
 ## CI/CD
 
@@ -225,8 +226,9 @@ Remove-Item -Recurse "$env:LOCALAPPDATA\Programs\qwen-translate", "$env:LOCALAPP
 
 | 问题 | 处理 |
 | --- | --- |
-| 自动下载失败 | 手动 `scripts/download-model.sh`，或 `--model-source huggingface` 换源 |
-| 浮层提示「无法启动翻译程序」 | 确认 `scripts/install-native-host.sh` 已运行且二进制路径存在 |
+| 自动下载失败 | 重新运行即可续传已下载部分；或手动 `scripts/download-model.sh`，或 `--model-source huggingface` 换源 |
+| 浮层提示「无法启动翻译程序」/「native messaging host not found」 | 重新运行 `scripts/install-native-host.sh`（Windows：`scripts\install-native-host.ps1`），确认二进制路径存在；Chrome 需保持扩展 ID 为 `bfkmmaobjaldoelkdphajjagomjehbpc`（直接加载未修改的 `chrome/`） |
+| PowerShell 中中文乱码 | 将控制台编码设为 UTF-8，见「使用」 |
 | Vulkan 构建报 `SPIRV-Headers` 缺失 | 见上文「从源码构建」一节 |
 | GPU 没生效 | 运行时会自动回退 CPU，属正常；检查 `vulkaninfo --summary`；CUDA 构建需另行安装 cuda 工具链 |
 
