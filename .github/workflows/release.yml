@@ -19,6 +19,9 @@ jobs:
           - os: macos-latest
             cargo_flags: --features metal
             target_name: macos-arm64
+          - os: windows-latest
+            cargo_flags: ""
+            target_name: windows-x86_64
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -32,43 +35,58 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake clang spirv-headers libvulkan-dev glslang-tools glslc rpm ruby ruby-dev build-essential libarchive-tools
 
+      - name: Windows build environment (static CRT, no VC++ redistributable needed)
+        if: runner.os == 'Windows'
+        run: |
+          echo "RUSTFLAGS=-C target-feature=+crt-static" >> "$GITHUB_ENV"
+          echo "LLAMA_STATIC_CRT=1" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
         run: cargo build --release ${{ matrix.cargo_flags }}
 
       - name: Strip binary
+        if: runner.os != 'Windows'
         run: strip target/release/translate
 
       - name: Download model (for model-bundled packages)
         run: MODEL_SOURCE=huggingface bash scripts/download-model.sh
 
-      - name: Assemble tar.xz archives (without / with model)
+      - name: Assemble archives (without / with model)
         run: |
           set -euo pipefail
           VER="${GITHUB_REF_NAME}"
           PKG="qwen-translate-${VER}-${{ matrix.target_name }}"
-          if [ "$RUNNER_OS" = macOS ]; then
-            MODEL_DIR="$HOME/Library/Application Support/qwen-translate"
-          else
-            MODEL_DIR="$HOME/.local/share/qwen-translate"
-          fi
+          case "$RUNNER_OS" in
+            Windows) EXE=translate.exe; MODEL_DIR="$(cygpath -u "$LOCALAPPDATA")/qwen-translate" ;;
+            macOS) EXE=translate; MODEL_DIR="$HOME/Library/Application Support/qwen-translate" ;;
+            *) EXE=translate; MODEL_DIR="$HOME/.local/share/qwen-translate" ;;
+          esac
           rm -rf "$PKG" dist
           mkdir -p "$PKG" dist
-          cp target/release/translate "$PKG/"
+          cp "target/release/$EXE" "$PKG/"
           cp README.md README.zh-CN.md LICENSE "$PKG/"
           cp -r scripts firefox "$PKG/"
 
-          tar -cJf "dist/$PKG.tar.xz" "$PKG"
+          # zip on Windows, tar.xz elsewhere
+          archive() {
+            if [ "$RUNNER_OS" = Windows ]; then
+              7z a -tzip -bd "dist/$1.zip" "$PKG" > /dev/null
+            else
+              tar -cJf "dist/$1.tar.xz" "$PKG"
+            fi
+          }
+          archive "$PKG"
           mkdir -p "$PKG/model"
           cp "$MODEL_DIR/Qwen3.5-2B-Q4_K_M.gguf" "$MODEL_DIR/Qwen3.5-2B-mmproj-F16.gguf" "$PKG/model/"
-          tar -cJf "dist/$PKG-with-model.tar.xz" "$PKG"
+          archive "$PKG-with-model"
 
           cd dist
           if [ "$RUNNER_OS" = macOS ]; then
-            shasum -a 256 "$PKG.tar.xz" "$PKG-with-model.tar.xz" > "$PKG-sha256sums.txt"
+            shasum -a 256 "$PKG".* "$PKG"-with-model.* > "$PKG-sha256sums.txt"
           else
-            sha256sum "$PKG.tar.xz" "$PKG-with-model.tar.xz" > "$PKG-sha256sums.txt"
+            sha256sum "$PKG".* "$PKG"-with-model.* > "$PKG-sha256sums.txt"
           fi
           ls -lh
 

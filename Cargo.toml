@@ -17,8 +17,10 @@ thiserror = "2"
 clap = { version = "4", features = ["derive", "env"] }
 image = "0.25"
 
-# Desktop: OpenMP threading (llama-cpp-2's default)
-[target.'cfg(not(target_os = "android"))'.dependencies]
+# Linux/macOS: OpenMP threading (llama-cpp-2's default). Windows uses ggml's own
+# thread pool: MSVC's OpenMP runtime (vcomp140.dll) needs the VC++ redistributable,
+# while translate.exe is built with a static CRT to run without it.
+[target.'cfg(not(any(target_os = "android", windows)))'.dependencies]
 llama-cpp-2 = { version = "0.1", default-features = false, features = ["openmp"] }
 
 # Android: static libc++ and ggml's own thread pool instead of OpenMP, since phones

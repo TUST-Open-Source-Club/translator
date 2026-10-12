@@ -12,12 +12,18 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            features: vulkan
+            cargo_flags: --features vulkan
             model_dir: ~/.local/share/qwen-translate
           - os: macos-latest
-            features: metal
+            cargo_flags: --features metal
             model_dir: ~/Library/Application Support/qwen-translate
+          - os: windows-latest
+            cargo_flags: ""
+            model_dir: ~/AppData/Local/qwen-translate
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -27,10 +33,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake clang spirv-headers libvulkan-dev glslang-tools glslc
 
+      - name: Windows build environment (static CRT, no VC++ redistributable needed)
+        if: runner.os == 'Windows'
+        run: |
+          echo "RUSTFLAGS=-C target-feature=+crt-static" >> "$GITHUB_ENV"
+          echo "LLAMA_STATIC_CRT=1" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release --features ${{ matrix.features }}
+        run: cargo build --release ${{ matrix.cargo_flags }}
 
       - name: Cache model
         uses: actions/cache@v4
