@@ -5,7 +5,7 @@ use clap::ValueEnum;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::infer::{default_target, Lang, TextSession, Translator};
+use crate::infer::{resolve_direction, Lang, TextSession, Translator};
 
 const MAX_MSG_LEN: u32 = 8 * 1024 * 1024;
 
@@ -136,11 +136,11 @@ fn translate(session: &mut TextSession, value: &Value) -> std::result::Result<St
     if text.is_empty() {
         return Err("empty text".into());
     }
-    let source = parse_lang(req.from.as_deref())?;
-    let target = match parse_lang(req.to.as_deref())? {
-        Some(t) => t,
-        None => default_target(source.unwrap_or_else(|| Lang::detect(text))),
-    };
+    let (source, target) = resolve_direction(
+        text,
+        parse_lang(req.from.as_deref())?,
+        parse_lang(req.to.as_deref())?,
+    );
     session
         .translate(text, source, target, false)
         .map_err(|e| format!("{e:#}"))

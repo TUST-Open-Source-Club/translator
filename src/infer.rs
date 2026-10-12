@@ -126,6 +126,21 @@ pub fn default_target(source: Lang) -> Lang {
     }
 }
 
+/// Source and target for a request. An explicit source wins; otherwise Japanese and
+/// Korean, recognised by scripts unique to them (kana, hangul), are named in the
+/// prompt as well: left open, the models tend to echo short kana/hangul text instead
+/// of translating it. Latin-script text stays open (en/fr/de/es/pt look alike).
+pub fn resolve_direction(
+    text: &str,
+    source: Option<Lang>,
+    target: Option<Lang>,
+) -> (Option<Lang>, Lang) {
+    let detected = Lang::detect(text);
+    let source = source.or_else(|| matches!(detected, Lang::Ja | Lang::Ko).then_some(detected));
+    let target = target.unwrap_or_else(|| default_target(source.unwrap_or(detected)));
+    (source, target)
+}
+
 pub struct Translator {
     backend: LlamaBackend,
     model: LlamaModel,
@@ -665,6 +680,18 @@ mod tests {
         let text = "x".repeat(100) + "中文".repeat(50).as_str();
         let chunks = check_chunks(&text, 16);
         assert!(chunks.len() >= 13);
+    }
+
+    #[test]
+    fn direction_names_unambiguous_sources_only() {
+        let resolve = |text| resolve_direction(text, None, None);
+        assert!(resolve("日本語を勉強しています") == (Some(Lang::Ja), Lang::Zh));
+        assert!(resolve("안녕하세요") == (Some(Lang::Ko), Lang::Zh));
+        assert!(resolve("今天天气很好") == (None, Lang::En));
+        assert!(resolve("Bonjour tout le monde") == (None, Lang::Zh));
+        // explicit choices always win
+        let explicit = resolve_direction("안녕하세요", Some(Lang::Ja), Some(Lang::En));
+        assert!(explicit == (Some(Lang::Ja), Lang::En));
     }
 
     #[test]

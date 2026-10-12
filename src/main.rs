@@ -14,7 +14,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use download::{ModelSource, ModelVariant, VARIANT_DEFAULT, VARIANT_FAST, VARIANT_QUALITY};
 use err::AppError;
-use infer::{default_target, Lang, SourceLang, Translator};
+use infer::{resolve_direction, Lang, SourceLang, Translator};
 
 const ENV_MODEL: &str = "QWEN_TRANSLATE_MODEL";
 /// Add-on ID of the Firefox extension (firefox/manifest.json)
@@ -425,9 +425,7 @@ fn run() -> Result<()> {
     ensure_model(&choice, model_source)?;
     let translator = Translator::load(&choice.path, args.gpu_layers, args.threads)
         .map_err(|e| err::or_kind(e, AppError::Model))?;
-    let target = args
-        .to
-        .unwrap_or_else(|| default_target(source.unwrap_or_else(|| Lang::detect(text))));
+    let (source, target) = resolve_direction(text, source, args.to);
     let out = translator.translate(text, source, target, !args.no_stream)?;
     print_result(&out, !args.no_stream)
 }
