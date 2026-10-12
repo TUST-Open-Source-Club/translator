@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -44,6 +45,9 @@ jobs:
       - name: Build
         run: cargo build --release ${{ matrix.cargo_flags }}
 
+      - name: Unit tests
+        run: cargo test --release ${{ matrix.cargo_flags }}
+
       - name: Cache model
         uses: actions/cache@v4
         with:
@@ -67,6 +71,16 @@ jobs:
           out=$(./target/release/translate --model-source huggingface --image tests/fixtures/hello-en.png)
           echo "image->zh: $out"
           echo "$out" | grep -q "编程"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Smoke test (native messaging host, browser-style launch)
+        run: |
+          exe=./target/release/translate
+          [ "$RUNNER_OS" = Windows ] && exe=./target/release/translate.exe
+          python tests/native_host_smoke.py "$exe"
 
   android:
     runs-on: ubuntu-latest
