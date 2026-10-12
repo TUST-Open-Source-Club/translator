@@ -561,7 +561,7 @@ fn pack<'t>(
         return;
     }
     let pieces: Vec<&str> = match level {
-        0 => text.split_inclusive("\n\n").collect(),
+        0 => paragraphs(text),
         1 => text.split_inclusive('\n').collect(),
         2 => sentences(text),
         _ => {
@@ -600,6 +600,24 @@ fn pack<'t>(
     if end > start {
         out.push(&text[start..end]);
     }
+}
+
+/// Split after blank lines. Works for CRLF text too ("\r\n\r\n" contains no "\n\n")
+/// and for "blank" lines holding only spaces.
+fn paragraphs(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut start, mut end) = (0, 0);
+    for line in text.split_inclusive('\n') {
+        end += line.len();
+        if line.trim().is_empty() {
+            out.push(&text[start..end]);
+            start = end;
+        }
+    }
+    if start < text.len() {
+        out.push(&text[start..]);
+    }
+    out
 }
 
 /// Split after sentence-ending punctuation (CJK full-width marks, or ASCII marks
@@ -708,6 +726,16 @@ mod tests {
     fn chunks_prefer_paragraphs() {
         let text = "aaaa\nbbbb\n\ncccc\ndd\n";
         assert_eq!(check_chunks(text, 12), vec!["aaaa\nbbbb\n\n", "cccc\ndd\n"]);
+    }
+
+    #[test]
+    fn chunks_prefer_paragraphs_with_crlf() {
+        // Packing line by line would cut the second paragraph after "bbbbbb"
+        let text = "a\r\n\r\nbbbbbb\r\ncc\r\n";
+        assert_eq!(
+            check_chunks(text, 14),
+            vec!["a\r\n\r\n", "bbbbbb\r\ncc\r\n"]
+        );
     }
 
     #[test]
