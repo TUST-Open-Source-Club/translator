@@ -63,7 +63,11 @@ download_one() {
       ;;
   esac
 
-  # A partial download is kept in $dest.tmp and resumed (-C -) on the next attempt
+  # A partial download is kept in $dest.tmp and resumed (-C -) on the next attempt;
+  # one older than a day may stem from an older upload of the model: start over
+  if [[ -n "$(find "$dest.tmp" -mtime +0 2>/dev/null)" ]]; then
+    rm -f "$dest.tmp"
+  fi
   local url rc
   for url in "${urls[@]}"; do
     echo "Downloading: $url" >&2

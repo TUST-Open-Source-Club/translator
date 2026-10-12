@@ -1,5 +1,7 @@
+use std::fs::{File, TryLockError};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
@@ -74,8 +76,26 @@ pub fn download_mmproj(v: &ModelVariant, dest: &Path, source: ModelSource) -> Re
 fn download_file(dest: &Path, source: ModelSource, repo: &str, file: &str) -> Result<()> {
     let dir = dest.parent().expect("model path has no parent directory");
     std::fs::create_dir_all(dir)?;
+
+    // The CLI and the browser's native host may fetch the same file at once; two
+    // curls resuming into one partial file would corrupt it. Take turns (the lock
+    // is released when the process exits, so it can't go stale).
+    let lock = File::create(dest.with_extension("gguf.lock"))?;
+    if let Err(TryLockError::WouldBlock) = lock.try_lock() {
+        eprintln!(
+            "Waiting for another download of {} to finish…",
+            dest.display()
+        );
+    }
+    lock.lock().context("failed to lock the download")?;
+    if dest.is_file() {
+        // finished by the other process while we waited
+        return Ok(());
+    }
+
     // A partial download is kept here and resumed on the next attempt / run
     let tmp = dest.with_extension("gguf.tmp");
+    discard_stale(&tmp);
 
     let mut tried = Vec::new();
     for url in source.urls(repo, file) {
@@ -97,6 +117,20 @@ fn download_file(dest: &Path, source: ModelSource, repo: &str, file: &str) -> Re
         "download failed (tried: {}); rerun to resume the partial download",
         tried.join(", ")
     )
+}
+
+/// A partial file left for more than a day may stem from an older upload of the
+/// model; resuming it would splice two versions together, so start over instead
+fn discard_stale(tmp: &Path) {
+    const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+    let stale = std::fs::metadata(tmp)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age > MAX_AGE);
+    if stale {
+        let _ = std::fs::remove_file(tmp);
+    }
 }
 
 /// Run the system curl (progress bar on stderr, stdout stays clean). Transient
