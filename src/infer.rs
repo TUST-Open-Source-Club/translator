@@ -181,11 +181,13 @@ impl Translator {
             .with_n_threads_batch(threads)
     }
 
-    /// Greedy decode loop (deterministic output); `stream` prints pieces to stdout as generated
+    /// Greedy decode loop (deterministic output); `stream` prints pieces to stdout as
+    /// generated. `pos` is the next free position and is advanced past every
+    /// generated token, so a conversation can continue.
     fn generate(
         &self,
         ctx: &mut LlamaContext,
-        start_pos: i32,
+        pos: &mut i32,
         max_tokens: usize,
         stream: bool,
     ) -> Result<String> {
@@ -193,7 +195,6 @@ impl Translator {
         let mut sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
         let mut batch = LlamaBatch::new(1, 1);
         let mut out_bytes: Vec<u8> = Vec::new();
-        let mut pos = start_pos;
         let stdout = std::io::stdout();
         for _ in 0..max_tokens {
             let token = sampler.sample(ctx, -1);
@@ -211,12 +212,28 @@ impl Translator {
                 }
             }
             batch.clear();
-            batch.add(token, pos, &[0], true)?;
-            pos += 1;
+            batch.add(token, *pos, &[0], true)?;
+            *pos += 1;
             ctx.decode(&mut batch).context("decode failed")?;
         }
         let raw = String::from_utf8_lossy(&out_bytes);
         Ok(strip_think(&raw).to_string())
+    }
+
+    /// Append chat-template text (special tokens parsed) at `pos`, logits on the last token
+    fn eval_text(&self, ctx: &mut LlamaContext, pos: &mut i32, text: &str) -> Result<()> {
+        let tokens = self.model.vocab().tokenize(text.as_bytes(), false, true);
+        let mut batch = LlamaBatch::new(N_BATCH, 1);
+        for (n, piece) in tokens.chunks(N_BATCH).enumerate() {
+            batch.clear();
+            let last_piece = (n + 1) * N_BATCH >= tokens.len();
+            for (i, t) in piece.iter().enumerate() {
+                batch.add(*t, *pos, &[0], last_piece && i == piece.len() - 1)?;
+                *pos += 1;
+            }
+            ctx.decode(&mut batch).context("failed to process prompt")?;
+        }
+        Ok(())
     }
 
     /// One-shot convenience wrapper around [`TextSession::translate`]
@@ -304,77 +321,81 @@ impl Translator {
             Some(s) => format!("from {} ", s.name()),
             None => String::new(),
         };
-        let target = match target {
-            Some(t) => t,
-            // Auto direction: pass 1 detects whether the image text is Chinese,
-            // pass 2 translates with an explicit target (small models cannot handle
-            // conditional direction in a single prompt).
-            None => {
-                let probe = format!(
-                    "<|im_start|>user\n{}\nIs the text in this image in Chinese? Answer only yes or no.<|im_end|>\n\
-                     <|im_start|>assistant\n<think>\n\n</think>\n\n",
-                    mtmd_default_marker()
-                );
-                let answer = self.run_vision_prompt(&bitmap, probe, 8, false)?;
-                if answer.to_lowercase().contains("yes") {
-                    Lang::En
-                } else {
-                    Lang::Zh
-                }
-            }
+        let marker = mtmd_default_marker();
+        let assistant = "<|im_start|>assistant\n<think>\n\n</think>\n\n";
+        let instruction = |target: Lang| {
+            format!(
+                "Read the text in this image and translate it {from}into {}. \
+                 Output only the translation.<|im_end|>\n",
+                target.name()
+            )
         };
-
-        let prompt = format!(
-            "<|im_start|>system\n\
-             You are a professional translator. Output only the translation, without any explanation.<|im_end|>\n\
-             <|im_start|>user\n{}\nRead the text in this image and translate it {from}into {}. \
-             Output only the translation.<|im_end|>\n\
-             <|im_start|>assistant\n<think>\n\n</think>\n\n",
-            mtmd_default_marker(),
-            target.name()
-        );
-        self.run_vision_prompt(&bitmap, prompt, 2048, stream)
-    }
-
-    /// Run one vision prompt: tokenize (text + image) -> encode -> greedy decode
-    fn run_vision_prompt(
-        &mut self,
-        bitmap: &MtmdBitmap,
-        prompt: String,
-        max_tokens: usize,
-        stream: bool,
-    ) -> Result<String> {
-        let input = MtmdInputText {
-            text: prompt,
-            add_special: true,
-            parse_special: true,
-        };
-        // tokenize only needs &MtmdContext
-        let chunks = {
-            let mtmd = self
-                .mtmd
-                .as_ref()
-                .context("mmproj not loaded; image translation unavailable")?;
-            mtmd.tokenize(input, &[bitmap])
-                .map_err(|e| anyhow::anyhow!("failed to tokenize image: {e}"))?
-        };
+        let system = "<|im_start|>system\n\
+             You are a professional translator. Output only the translation, without any explanation.<|im_end|>\n";
 
         let mut ctx = self
             .model
             .new_context(&self.backend, self.ctx_params(N_CTX_VISION))?;
-        // eval_chunks needs &mut MtmdContext; keep the borrow short
-        let n_past = {
-            let mtmd = self
-                .mtmd
-                .as_mut()
-                .context("mmproj not loaded; image translation unavailable")?;
-            chunks
-                .eval_chunks(mtmd, &mut ctx, 0, 0, N_BATCH as i32, true)
-                .map_err(|e| anyhow::anyhow!("failed to encode image: {e}"))?
+        let mtmd = self
+            .mtmd
+            .as_mut()
+            .context("mmproj not loaded; image translation unavailable")?;
+        let mut pos = match target {
+            Some(target) => {
+                let prompt = format!(
+                    "{system}<|im_start|>user\n{marker}\n{}{assistant}",
+                    instruction(target)
+                );
+                eval_vision_prompt(mtmd, &mut ctx, &bitmap, prompt)?
+            }
+            // Auto direction: turn 1 asks whether the image text is Chinese, turn 2
+            // translates with an explicit target (small models cannot handle a
+            // conditional direction in a single prompt). Both turns share one
+            // context, so the image is encoded only once.
+            None => {
+                let probe = format!(
+                    "{system}<|im_start|>user\n{marker}\n\
+                     Is the text in this image in Chinese? Answer only yes or no.<|im_end|>\n\
+                     {assistant}"
+                );
+                let mut pos = eval_vision_prompt(mtmd, &mut ctx, &bitmap, probe)?;
+                let answer = self.generate(&mut ctx, &mut pos, 8, false)?;
+                let target = if answer.to_lowercase().contains("yes") {
+                    Lang::En
+                } else {
+                    Lang::Zh
+                };
+                let follow_up = format!(
+                    "<|im_end|>\n<|im_start|>user\n{}{assistant}",
+                    instruction(target)
+                );
+                self.eval_text(&mut ctx, &mut pos, &follow_up)?;
+                pos
+            }
         };
-
-        self.generate(&mut ctx, n_past, max_tokens, stream)
+        self.generate(&mut ctx, &mut pos, 2048, stream)
     }
+}
+
+/// Tokenize a prompt containing the image marker, then encode the image and
+/// evaluate everything into `ctx`; returns the next free position
+fn eval_vision_prompt(
+    mtmd: &mut MtmdContext,
+    ctx: &mut LlamaContext,
+    bitmap: &MtmdBitmap,
+    prompt: String,
+) -> Result<i32> {
+    let input = MtmdInputText {
+        text: prompt,
+        add_special: true,
+        parse_special: true,
+    };
+    let chunks = mtmd
+        .tokenize(input, &[bitmap])
+        .map_err(|e| anyhow::anyhow!("failed to tokenize image: {e}"))?;
+    chunks
+        .eval_chunks(mtmd, ctx, 0, 0, N_BATCH as i32, true)
+        .map_err(|e| anyhow::anyhow!("failed to encode image: {e}"))
 }
 
 /// Text translation context (KV cache) bound to a loaded model. Creating it
@@ -460,7 +481,8 @@ impl TextSession<'_> {
         // Output budget: generous for verbose target languages, but never past the
         // end of the context window (decoding there fails and loses everything).
         let max_out = (tokens.len() * 2 + 128).min(n_ctx - tokens.len());
-        translator.generate(&mut self.ctx, tokens.len() as i32, max_out, stream)
+        let mut pos = tokens.len() as i32;
+        translator.generate(&mut self.ctx, &mut pos, max_out, stream)
     }
 }
 
