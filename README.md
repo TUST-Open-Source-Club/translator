@@ -156,7 +156,7 @@ Pre-download or switch quants with `scripts/download-model.sh` (`MODEL_SOURCE` /
 | --- | --- |
 | 0 | success |
 | 1 | runtime error (inference, I/O, …) |
-| 2 | usage error (bad args, no input, text too long, …) |
+| 2 | usage error (bad args, no input, region out of bounds, …) |
 | 3 | model error (missing explicit path, load failure, …) |
 | 4 | download failure |
 | 5 | the model does not support the requested feature (e.g. images) |

@@ -135,7 +135,7 @@ struct Args {
 }
 
 fn data_dir_path(file: &str) -> PathBuf {
-    // Local (non-roaming) app data: %LOCALAPPDATA% on Windows, so ~700MB of model
+    // Local (non-roaming) app data: %LOCALAPPDATA% on Windows, so gigabytes of model
     // files don't travel with roaming profiles; the same as data_dir() elsewhere
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))

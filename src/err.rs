@@ -7,7 +7,7 @@ pub enum AppError {
     #[allow(dead_code)]
     #[error("{0}")]
     Runtime(String),
-    /// 2: bad usage (invalid args, no input, text too long, ...)
+    /// 2: bad usage (invalid args, no input, image region out of bounds, ...)
     #[error("{0}")]
     Usage(String),
     /// 3: model problems (missing explicit path, load failure, ...)
