@@ -56,32 +56,45 @@ impl Lang {
 
     /// Rough language detection of the text (for picking the default target)
     pub fn detect(text: &str) -> Lang {
-        let (mut han, mut kana, mut hangul, mut cyrillic) = (0usize, 0usize, 0usize, 0usize);
+        let (mut han, mut kana, mut hangul, mut cyrillic, mut latin) = (0usize, 0, 0, 0, 0);
+        let mut zh_only = 0usize;
         for c in text.chars() {
             match c as u32 {
                 // Hiragana / Katakana / phonetic extensions / half-width Katakana
                 0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F => kana += 1,
-                0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF => han += 1,
+                0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF => {
+                    han += 1;
+                    zh_only += usize::from(is_simplified_only(c));
+                }
                 // Hangul syllables / Jamo / compatibility Jamo
                 0xAC00..=0xD7AF | 0x1100..=0x11FF | 0x3130..=0x318F => hangul += 1,
                 0x0400..=0x04FF => cyrillic += 1,
+                _ if c.is_alphabetic() => latin += 1,
                 _ => {}
             }
         }
-        // Japanese mixes kanji with kana, so kana must win over han; Chinese text
-        // may still borrow the odd kana (e.g. "の"), hence the ratio rather than any().
-        if kana > 0 && kana * 10 >= han {
+        // One CJK character carries about as much as a short word, so weigh CJK
+        // characters against letters: an English text with a few Chinese characters
+        // (e.g. a "[简体中文]" link) is English, not Chinese.
+        let cjk = han + kana + hangul;
+        if cjk == 0 || cjk * 3 < latin + cyrillic {
+            return if cyrillic > latin { Lang::Ru } else { Lang::En };
+        }
+        // Japanese writes kanji together with plenty of kana and never uses simplified
+        // Chinese characters; Chinese text may still quote a Japanese phrase.
+        if kana > 0 && kana * 4 >= han && kana > zh_only * 2 {
             Lang::Ja
         } else if hangul > 0 && hangul >= han {
             Lang::Ko
-        } else if han > 0 {
-            Lang::Zh
-        } else if cyrillic > 0 {
-            Lang::Ru
         } else {
-            Lang::En
+            Lang::Zh
         }
     }
+}
+
+/// Frequent simplified Chinese characters that Japanese never uses
+fn is_simplified_only(c: char) -> bool {
+    "这们说时个么还对让给过你她吗呢吧没从现发经长开关间问题语话见车东认识样习学术后".contains(c)
 }
 
 /// Source language (auto = detect)
@@ -634,6 +647,31 @@ mod tests {
     #[test]
     fn detect_chinese_with_stray_kana() {
         assert!(Lang::detect("这是我们学校の图书馆，里面有很多很多的书") == Lang::Zh);
+    }
+
+    #[test]
+    fn detect_chinese_quoting_japanese() {
+        let text = "他在日本留学时，最常说的一句话是「よろしくお願いします」，现在回国了还改不掉。";
+        assert!(Lang::detect(text) == Lang::Zh);
+    }
+
+    #[test]
+    fn detect_kanji_heavy_japanese() {
+        assert!(Lang::detect("内閣総理大臣は記者会見で経済対策を発表した。") == Lang::Ja);
+        assert!(Lang::detect("首相が来日") == Lang::Ja);
+    }
+
+    #[test]
+    fn detect_by_dominant_script() {
+        // A few CJK characters inside alphabetic text don't make it CJK
+        let readme = "**English** | [简体中文](README.zh-CN.md)\n\nLocal, offline translation: \
+                      Rust + llama.cpp running Qwen3.5, composed with other tools in pipelines.";
+        assert!(Lang::detect(readme) == Lang::En);
+        assert!(Lang::detect("In Japanese, people say ありがとう to thank someone.") == Lang::En);
+        assert!(Lang::detect("Привет, это короткий тест with English") == Lang::Ru);
+        // ... while Chinese with some English terms stays Chinese
+        assert!(Lang::detect("使用 llama.cpp 和 Vulkan 加速推理") == Lang::Zh);
+        assert!(Lang::detect("12345 !!!") == Lang::En);
     }
 
     /// Test tokenizer stand-in: one token per char
