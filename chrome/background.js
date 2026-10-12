@@ -121,6 +121,11 @@ async function onMenuClicked(info, tab) {
     () => null,
   );
   if (shown && shown.text) req.text = shown.text;
+  // The new panel replaced the old one in this frame, so requests still waiting
+  // for it are stale; drop them (the one in flight can't be cancelled)
+  queue = queue.filter(
+    (r, i) => (busy && i === 0) || r.tabId !== req.tabId || r.frameId !== req.frameId,
+  );
   queue.push(req);
   pump();
 }
