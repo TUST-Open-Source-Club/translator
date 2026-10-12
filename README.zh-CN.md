@@ -193,6 +193,7 @@ scripts/pack-crx.py chrome path/to/key.pem qwen-translate.crx --zip qwen-transla
 
 说明：
 - 扩展与翻译程序之间走 Native Messaging 连接，模型在两次翻译之间常驻内存，空闲 5 分钟后自动释放。
+- 选区超过 4096 token 会被拒绝（整页翻译会让翻译程序忙上好几分钟），长文档请用命令行。
 - 浮层脚本只在右键点击时通过 `activeTab` 注入当前页面（所在 frame），不申请「读取和更改所有网站数据」权限。
 - Firefox 重启后临时加载的扩展会消失，需重新在 about:debugging 载入；长期使用可打包签名或用 `web-ext run`。
 - 受限页面（`about:*`、`chrome://*`、扩展商店等）无法注入浮层，属于浏览器限制。

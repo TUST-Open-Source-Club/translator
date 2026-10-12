@@ -8,6 +8,11 @@ use serde_json::{json, Value};
 use crate::infer::{resolve_direction, Lang, TextSession, Translator};
 
 const MAX_MSG_LEN: u32 = 8 * 1024 * 1024;
+/// Longest selection translated for the extension. The CLI handles any length, but
+/// here a whole-page selection would occupy the host for many minutes while the
+/// panel can't cancel it, blocking every later request (and the reply may exceed
+/// Chrome's 1MB limit for host messages).
+const MAX_REQUEST_TOKENS: usize = 4096;
 
 /// Request body. Every field but `text` is optional, so older extensions keep working.
 #[derive(Deserialize)]
@@ -135,6 +140,13 @@ fn translate(session: &mut TextSession, value: &Value) -> std::result::Result<St
     let text = req.text.trim();
     if text.is_empty() {
         return Err("empty text".into());
+    }
+    let tokens = session.token_count(text);
+    if tokens > MAX_REQUEST_TOKENS {
+        return Err(format!(
+            "selection too long ({tokens} tokens, limit {MAX_REQUEST_TOKENS}); \
+             select less text or use the translate command"
+        ));
     }
     let (source, target) = resolve_direction(
         text,

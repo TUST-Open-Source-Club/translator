@@ -451,6 +451,12 @@ pub struct TextSession<'a> {
 }
 
 impl TextSession<'_> {
+    /// Number of tokens `text` takes up in a prompt
+    pub fn token_count(&self, text: &str) -> usize {
+        let vocab = self.translator.model.vocab();
+        vocab.tokenize(text.as_bytes(), false, false).len()
+    }
+
     /// Translate text of any length. Input longer than [`CHUNK_TOKENS`] is split at
     /// paragraph / line / sentence boundaries and translated chunk by chunk, keeping
     /// the whitespace between chunks, so prompt + output always fit in the context.

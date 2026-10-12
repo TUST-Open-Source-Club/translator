@@ -193,6 +193,7 @@ The key must match the `key` in `chrome/manifest.json` (the script checks), othe
 
 Notes:
 - The extension talks to the binary over a native-messaging connection; the model stays loaded between translations and is released after 5 idle minutes.
+- Selections over 4096 tokens are refused (a whole page would keep the translator busy for minutes); use the CLI for long documents.
 - The panel script is injected only into the page (frame) you right-click, via `activeTab` — no access to all sites is requested.
 - Temporarily loaded Firefox add-ons vanish on browser restart; reload via about:debugging, or use `web-ext run`.
 - Restricted pages (`about:*`, `chrome://*`, extension stores, …) can't be scripted — a browser limitation.
