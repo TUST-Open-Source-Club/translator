@@ -62,9 +62,10 @@ function pump() {
 async function injectPanel(tabId, frameId) {
   for (const id of frameId ? [frameId, 0] : [0]) {
     try {
-      const target = { tabId, frameIds: [id] };
-      await browser.scripting.insertCSS({ target, files: ["panel.css"] });
-      await browser.scripting.executeScript({ target, files: ["content.js"] });
+      await browser.scripting.executeScript({
+        target: { tabId, frameIds: [id] },
+        files: ["content.js"],
+      });
       return id;
     } catch (e) {
       // cross-origin frame, or a restricted page (about:, addons.mozilla.org, …)
