@@ -4,6 +4,9 @@
   if (window.__qwenTranslateInjected) return;
   window.__qwenTranslateInjected = true;
 
+  // Shared by the Firefox and Chrome builds; keep firefox/ and chrome/ copies identical
+  const api = globalThis.browser ?? globalThis.chrome;
+
   // Panel styles live in a shadow root, so page CSS can't restyle the panel and
   // the panel's CSS can't leak into the page. `all: initial` on the panel also cuts
   // off inherited page styles; !important on :host beats page !important rules.
@@ -200,7 +203,7 @@
     }
   }
 
-  browser.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === "qt-show") {
       const text = selectedText() || msg.text;
       showPanel(msg.id, text);

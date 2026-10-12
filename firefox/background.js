@@ -1,5 +1,9 @@
 "use strict";
 
+// Shared by the Firefox (event page) and Chrome (service worker) builds;
+// keep firefox/ and chrome/ copies identical
+const api = globalThis.browser ?? globalThis.chrome;
+
 const HOST = "qwen_translate";
 const MENU_ID = "qt-translate-selection";
 // The host keeps the model (1-4 GB RAM, by variant) loaded; release it after this long unused
@@ -12,7 +16,7 @@ let nextId = 1;
 let idleTimer = null;
 
 function sendToPanel(req, msg) {
-  return browser.tabs.sendMessage(req.tabId, msg, { frameId: req.frameId });
+  return api.tabs.sendMessage(req.tabId, msg, { frameId: req.frameId });
 }
 
 function notify(req, msg) {
@@ -22,7 +26,7 @@ function notify(req, msg) {
 function ensurePort() {
   if (port) return true;
   try {
-    port = browser.runtime.connectNative(HOST);
+    port = api.runtime.connectNative(HOST);
   } catch (e) {
     return false;
   }
@@ -35,7 +39,7 @@ function ensurePort() {
   });
   port.onDisconnect.addListener((p) => {
     // Firefox reports why the host went away on the port itself
-    const err = p.error || browser.runtime.lastError;
+    const err = p.error || api.runtime.lastError;
     port = null;
     busy = false;
     const message = err && err.message ? err.message : "翻译程序连接断开";
@@ -79,7 +83,7 @@ function pump() {
 async function injectPanel(tabId, frameId) {
   for (const id of frameId ? [frameId, 0] : [0]) {
     try {
-      await browser.scripting.executeScript({
+      await api.scripting.executeScript({
         target: { tabId, frameIds: [id] },
         files: ["content.js"],
       });
@@ -93,18 +97,18 @@ async function injectPanel(tabId, frameId) {
 
 // Menus persist across restarts; (re)create them on install/startup only
 function createMenu() {
-  browser.contextMenus.removeAll().then(() => {
-    browser.contextMenus.create({
+  Promise.resolve(api.contextMenus.removeAll()).then(() => {
+    api.contextMenus.create({
       id: MENU_ID,
       title: "翻译选中内容",
       contexts: ["selection"],
     });
   });
 }
-browser.runtime.onInstalled.addListener(createMenu);
-browser.runtime.onStartup.addListener(createMenu);
+api.runtime.onInstalled.addListener(createMenu);
+api.runtime.onStartup.addListener(createMenu);
 
-browser.contextMenus.onClicked.addListener(async (info, tab) => {
+async function onMenuClicked(info, tab) {
   if (info.menuItemId !== MENU_ID || !tab || tab.id == null) return;
   const fallback = (info.selectionText || "").trim();
   if (!fallback) return;
@@ -119,4 +123,5 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
   if (shown && shown.text) req.text = shown.text;
   queue.push(req);
   pump();
-});
+}
+api.contextMenus.onClicked.addListener(onMenuClicked);
