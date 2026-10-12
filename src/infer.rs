@@ -248,9 +248,12 @@ impl Translator {
             out_bytes.extend_from_slice(&piece);
             if stream {
                 let mut out = stdout.lock();
-                if out.write_all(&piece).and_then(|()| out.flush()).is_err() {
-                    // The reader went away (e.g. `| head`): stop generating
-                    break;
+                if let Err(e) = out.write_all(&piece).and_then(|()| out.flush()) {
+                    // The reader went away (e.g. `| head`): stop the whole translation
+                    // instead of generating (and prefilling further chunks) for nobody
+                    if e.kind() == std::io::ErrorKind::BrokenPipe {
+                        return Err(e.into());
+                    }
                 }
             }
             batch.clear();

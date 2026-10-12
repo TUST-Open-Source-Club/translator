@@ -352,8 +352,9 @@ fn run() -> Result<()> {
                 download::download_mmproj(v, &mp, model_source)
                     .map_err(|e| err::or_kind(e, AppError::Download))?;
             }
-            println!("{}", m.display());
-            println!("{}", mp.display());
+            // Informational only: a closed stdout must not abort the downloads
+            let mut stdout = std::io::stdout().lock();
+            let _ = writeln!(stdout, "{}\n{}", m.display(), mp.display());
         }
         return Ok(());
     }
@@ -430,9 +431,18 @@ fn run() -> Result<()> {
     print_result(&out, !args.no_stream)
 }
 
+/// The reader of streamed output went away (e.g. `| head`): normal for a filter
+fn is_broken_pipe(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<std::io::Error>()
+            .is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe)
+    })
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
+        Err(e) if is_broken_pipe(&e) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e:#}");
             ExitCode::from(err::exit_code(&e))
