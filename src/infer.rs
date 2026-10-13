@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
+use image::ImageDecoder;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -80,8 +81,8 @@ impl Lang {
         if cjk == 0 || cjk * 3 < latin + cyrillic {
             return if cyrillic > latin { Lang::Ru } else { Lang::En };
         }
-        // Japanese writes kanji together with plenty of kana and never uses simplified
-        // Chinese characters; Chinese text may still quote a Japanese phrase.
+        // Japanese mixes kana with kanji. Distinctively simplified Chinese forms
+        // help distinguish Chinese text quoting a Japanese phrase.
         if kana > 0 && kana * 4 >= han && kana > zh_only * 2 {
             Lang::Ja
         } else if hangul > 0 && hangul >= han {
@@ -92,9 +93,10 @@ impl Lang {
     }
 }
 
-/// Frequent simplified Chinese characters that Japanese never uses
+/// Common simplified forms that differ from Japanese kanji. Shared forms such as
+/// 学, 没 and 后 cannot identify Chinese: 学生です and 没頭する are Japanese.
 fn is_simplified_only(c: char) -> bool {
-    "这们说时个么还对让给过你她吗呢吧没从现发经长开关间问题语话见车东认识样习学术后".contains(c)
+    "这们说时么还对让给过吗从现发经长开关间问题语话见车东认识样习术".contains(c)
 }
 
 /// Source language (auto = detect)
@@ -338,29 +340,13 @@ impl Translator {
         target: Option<Lang>,
         stream: bool,
     ) -> Result<String> {
-        let img = image::open(image_path)
-            .with_context(|| format!("failed to read image: {}", image_path.display()))?;
-        let img = match region {
-            Some((x, y, w, h)) => {
-                // checked_add: x + w can overflow u32 and slip past the bounds check
-                let fits = |start: u32, len: u32, max: u32| {
-                    len > 0 && start.checked_add(len).is_some_and(|end| end <= max)
-                };
-                if !fits(x, w, img.width()) || !fits(y, h, img.height()) {
-                    return Err(crate::err::usage(format!(
-                        "region out of bounds: image is {}x{}, requested x={x} y={y} w={w} h={h}",
-                        img.width(),
-                        img.height()
-                    )));
-                }
-                img.crop_imm(x, y, w, h)
-            }
-            None => img,
+        let bitmap = {
+            let rgb = read_image(image_path, region)?;
+            let (w, h) = rgb.dimensions();
+            // mtmd owns a copy; release the Rust pixel buffer before encoding.
+            MtmdBitmap::from_image_data(w, h, rgb.as_raw())
+                .map_err(|e| anyhow::anyhow!("failed to create bitmap: {e}"))?
         };
-        let rgb = img.to_rgb8();
-        let (w, h) = rgb.dimensions();
-        let bitmap = MtmdBitmap::from_image_data(w, h, rgb.as_raw())
-            .map_err(|e| anyhow::anyhow!("failed to create bitmap: {e}"))?;
 
         let from = match source {
             Some(s) => format!("from {} ", s.name()),
@@ -420,6 +406,38 @@ impl Translator {
         };
         self.generate(&mut ctx, &mut pos, 2048, stream)
     }
+}
+
+/// Decode photos in their displayed orientation, then apply the requested crop.
+/// Consuming the decoded image avoids cloning a full RGB photograph.
+fn read_image(path: &Path, region: Option<(u32, u32, u32, u32)>) -> Result<image::RgbImage> {
+    let mut img = (|| -> Result<image::DynamicImage> {
+        let mut decoder = image::ImageReader::open(path)?.into_decoder()?;
+        let orientation = decoder.orientation()?;
+        // ImageReader::decode reserves the output buffer against its limits;
+        // preserve that check when using the decoder directly for EXIF metadata.
+        let mut limits = image::Limits::default();
+        limits.reserve(decoder.total_bytes())?;
+        decoder.set_limits(limits)?;
+        let mut img = image::DynamicImage::from_decoder(decoder)?;
+        img.apply_orientation(orientation);
+        Ok(img)
+    })()
+    .with_context(|| format!("failed to read image: {}", path.display()))?;
+    if let Some((x, y, w, h)) = region {
+        let fits = |start: u32, len: u32, max: u32| {
+            len > 0 && start.checked_add(len).is_some_and(|end| end <= max)
+        };
+        if !fits(x, w, img.width()) || !fits(y, h, img.height()) {
+            return Err(crate::err::usage(format!(
+                "region out of bounds: image is {}x{}, requested x={x} y={y} w={w} h={h}",
+                img.width(),
+                img.height()
+            )));
+        }
+        img = img.crop_imm(x, y, w, h);
+    }
+    Ok(img.into_rgb8())
 }
 
 /// Tokenize a prompt containing the image marker, then encode the image and
@@ -659,6 +677,87 @@ fn strip_think(s: &str) -> &str {
 mod tests {
     use super::*;
 
+    struct TempImage(std::path::PathBuf);
+
+    impl TempImage {
+        fn new(extension: &str) -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            Self(std::env::temp_dir().join(format!(
+                "translate-image-test-{}-{}-{}.{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                extension
+            )))
+        }
+    }
+
+    impl Drop for TempImage {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn image_exif_orientation_is_applied_before_region_coordinates() {
+        use image::ImageEncoder;
+
+        let source = image::RgbImage::from_fn(3, 2, |x, y| {
+            image::Rgb([(x * 70) as u8, (y * 180) as u8, 30])
+        });
+        for (orientation, dimensions, top_left) in [
+            (1, (3, 2), (0, 0)),
+            (2, (3, 2), (2, 0)),
+            (3, (3, 2), (2, 1)),
+            (4, (3, 2), (0, 1)),
+            (5, (2, 3), (0, 0)),
+            (6, (2, 3), (0, 1)),
+            (7, (2, 3), (2, 1)),
+            (8, (2, 3), (2, 0)),
+        ] {
+            let path = TempImage::new("jpg");
+            let file = std::fs::File::create(&path.0).unwrap();
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 100);
+            // Little-endian TIFF with one SHORT Orientation entry in IFD0.
+            let mut exif =
+                b"II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x01\0\0\0\0\0\0\0".to_vec();
+            exif[18] = orientation;
+            encoder.set_exif_metadata(exif).unwrap();
+            encoder.encode_image(&source).unwrap();
+            drop(encoder);
+
+            let raw = image::open(&path.0).unwrap().into_rgb8();
+            let full = read_image(&path.0, None).unwrap();
+            assert_eq!(full.dimensions(), dimensions, "orientation {orientation}");
+            assert_eq!(full.get_pixel(0, 0), raw.get_pixel(top_left.0, top_left.1));
+            let crop = read_image(&path.0, Some((0, 0, dimensions.0, dimensions.1))).unwrap();
+            assert_eq!(crop, full);
+        }
+    }
+
+    #[test]
+    fn images_without_exif_keep_pixels_and_validate_crop_bounds() {
+        let path = TempImage::new("png");
+        let source = image::RgbImage::from_fn(3, 2, |x, y| image::Rgb([x as u8, y as u8, 42]));
+        source.save(&path.0).unwrap();
+        assert_eq!(read_image(&path.0, None).unwrap(), source);
+        let crop = read_image(&path.0, Some((1, 0, 2, 2))).unwrap();
+        assert_eq!(crop.dimensions(), (2, 2));
+        assert_eq!(crop.get_pixel(0, 0), source.get_pixel(1, 0));
+        for region in [
+            (0, 0, 0, 1),
+            (0, 0, 1, 0),
+            (0, 0, 3, 3),
+            (u32::MAX, 0, 2, 1),
+        ] {
+            let error = read_image(&path.0, Some(region)).unwrap_err();
+            assert_eq!(crate::err::exit_code(&error), 2);
+        }
+    }
+
     #[test]
     fn detect_languages() {
         assert!(Lang::detect("今天天气很好") == Lang::Zh);
@@ -673,6 +772,23 @@ mod tests {
         // Kanji + kana used to be detected as Chinese (and translated into English)
         assert!(Lang::detect("日本語を勉強しています") == Lang::Ja);
         assert!(Lang::detect("東京都に住んでいます。") == Lang::Ja);
+    }
+
+    #[test]
+    fn shared_kanji_do_not_reverse_japanese_translation_direction() {
+        for text in [
+            "学生です",
+            "大学です",
+            "学ぶ",
+            "学校へ",
+            "没頭する",
+            "皇后です",
+        ] {
+            assert!(
+                resolve_direction(text, None, None) == (Some(Lang::Ja), Lang::Zh),
+                "wrong direction for {text}"
+            );
+        }
     }
 
     #[test]
