@@ -26,28 +26,45 @@ function notify(req, msg) {
 function ensurePort() {
   if (port) return true;
   try {
-    port = api.runtime.connectNative(HOST);
+    const connection = api.runtime.connectNative(HOST);
+    port = connection;
+    connection.onMessage.addListener((msg) => {
+      // A delayed event from a disconnected host must not consume a request
+      // belonging to a newer connection.
+      if (port !== connection) return;
+      const req = queue.shift();
+      busy = false;
+      if (req) notify(req, { translation: msg.translation, error: msg.error });
+      if (queue.length === 0) scheduleIdle();
+      pump();
+    });
+    connection.onDisconnect.addListener((p) => {
+      if (port !== connection) return;
+      port = null;
+      busy = false;
+      const err = p.error || api.runtime.lastError;
+      const message = err && err.message ? err.message : "翻译程序连接断开";
+      const pending = queue;
+      queue = [];
+      for (const req of pending) notify(req, { error: message });
+    });
   } catch (e) {
+    port = null;
     return false;
   }
-  port.onMessage.addListener((msg) => {
-    const req = queue.shift();
-    busy = false;
-    if (req) notify(req, { translation: msg.translation, error: msg.error });
-    if (queue.length === 0) scheduleIdle();
-    pump();
-  });
-  port.onDisconnect.addListener((p) => {
-    // Firefox reports why the host went away on the port itself
-    const err = p.error || api.runtime.lastError;
-    port = null;
-    busy = false;
-    const message = err && err.message ? err.message : "翻译程序连接断开";
-    const pending = queue;
-    queue = [];
-    for (const req of pending) notify(req, { error: message });
-  });
   return true;
+}
+
+function failPort(message) {
+  const connection = port;
+  port = null;
+  busy = false;
+  const pending = queue;
+  queue = [];
+  for (const req of pending) notify(req, { error: message });
+  if (connection) {
+    try { connection.disconnect(); } catch (e) { /* already disconnected */ }
+  }
 }
 
 // Closing the port ends the host process (stdin EOF), freeing the model's memory;
@@ -74,7 +91,11 @@ function pump() {
     return;
   }
   busy = true;
-  port.postMessage({ id: queue[0].id, text: queue[0].text });
+  try {
+    port.postMessage({ id: queue[0].id, text: queue[0].text });
+  } catch (e) {
+    failPort(e && e.message ? e.message : "翻译程序连接断开");
+  }
 }
 
 // Inject the panel script into the clicked frame only when needed (the menu click
@@ -112,14 +133,21 @@ async function onMenuClicked(info, tab) {
   if (info.menuItemId !== MENU_ID || !tab || tab.id == null) return;
   const fallback = (info.selectionText || "").trim();
   if (!fallback) return;
-  const frameId = await injectPanel(tab.id, info.frameId || 0);
+  const selectionFrameId = info.frameId || 0;
+  const frameId = await injectPanel(tab.id, selectionFrameId);
   if (frameId == null) return;
   const req = { id: nextId++, tabId: tab.id, frameId, text: fallback };
-  // The panel replies with the page's own selection, which keeps line breaks
-  // (selectionText collapses them and may be truncated)
-  const shown = await sendToPanel(req, { type: "qt-show", id: req.id, text: fallback }).catch(
+  // Only the original frame can recover line breaks from the DOM selection.
+  // A fallback panel in the top frame may contain an unrelated old selection.
+  const shown = await sendToPanel(req, {
+    type: "qt-show", id: req.id, text: fallback,
+    useSelection: frameId === selectionFrameId,
+  }).catch(
     () => null,
   );
+  // If the tab/frame disappeared after injection, there is no receiver for
+  // the result. Do not spend a native-host request that can never be shown.
+  if (shown == null) return;
   if (shown && shown.text) req.text = shown.text;
   // The new panel replaced the old one in this frame, so requests still waiting
   // for it are stale; drop them (the one in flight can't be cancelled)

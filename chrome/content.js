@@ -205,7 +205,7 @@
 
   api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === "qt-show") {
-      const text = selectedText() || msg.text;
+      const text = (msg.useSelection && selectedText()) || msg.text;
       showPanel(msg.id, text);
       sendResponse({ text });
     } else if (msg.type === "qt-result" && current && msg.id === current.id) {
