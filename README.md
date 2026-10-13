@@ -68,7 +68,7 @@ termux-clipboard-get | translate | termux-clipboard-set   # translate the clipbo
 ```
 
 - CPU only. By default half of the cores are used (the big cores on typical big.LITTLE SoCs); tune with `--threads`.
-- The Android build downloads models over its own HTTPS client (with resume and retries), so no curl is needed and it also works from `adb shell`. It honours `HTTPS_PROXY`/`NO_PROXY`, and `SSL_CERT_FILE` replaces the bundled root certificates.
+- All builds use the same built-in HTTPS downloader (including `adb shell`), with no curl dependency. It honours `HTTPS_PROXY`/`NO_PROXY`, and `SSL_CERT_FILE` replaces the bundled root certificates. Downloads share a file lock across the CLI, browser host and pre-download script. Resuming requires a matching strong ETag from the same URL; legacy partials, changed models or mirrors without a usable validator restart safely. A stalled network read times out after 30 seconds and retries, without limiting the total duration of an active download.
 - The default 2B model needs about 2 GB of free RAM; on low-memory phones use `--fast` (0.8B, about 1 GB).
 - The browser extensions are desktop-only: mobile browsers don't support native messaging.
 
@@ -164,7 +164,7 @@ Model lookup order (first hit wins):
 4. System dirs: `/usr/local/share/qwen-translate/`, `/usr/share/qwen-translate/` (plus `/opt/homebrew/share/qwen-translate/` on macOS; `%ProgramData%\qwen-translate\` on Windows) — where model-bundled packages install
 5. Otherwise auto-downloads to the user data dir (ModelScope by default)
 
-Pre-download or switch variants with `scripts/download-model.sh` (`VARIANT=default/fast/quality`, `MODEL_SOURCE`, `MODEL_REPO` env overrides).
+Pre-download or switch variants with `scripts/download-model.sh` (`VARIANT=default/fast/quality`, `MODEL_SOURCE`, `MODEL_REPO`, and `MODEL_NAME` env overrides). It calls the packaged or locally built translator so all download entry points use the same locking and resume rules. In a source checkout without a binary it builds with Cargo; `TRANSLATE_BIN` selects a custom host binary.
 
 ## Recipes
 

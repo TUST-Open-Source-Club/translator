@@ -68,7 +68,7 @@ termux-clipboard-get | translate | termux-clipboard-set   # 翻译剪贴板（�
 ```
 
 - 仅 CPU 推理。默认使用一半核心（常见大小核 SoC 上即大核），可用 `--threads` 调整。
-- Android 版用内置的 HTTPS 客户端下载模型（支持断点续传和重试），无需 curl，在 `adb shell` 中也能用。支持 `HTTPS_PROXY`/`NO_PROXY` 代理设置；设置 `SSL_CERT_FILE` 时以其中的根证书替代内置根证书。
+- 所有平台共用内置 HTTPS 下载器，无需 curl，在 `adb shell` 中也能用。支持 `HTTPS_PROXY`/`NO_PROXY`；设置 `SSL_CERT_FILE` 时以其中的根证书替代内置根证书。CLI、浏览器宿主和预下载脚本共用文件锁。仅在同一 URL 的强 ETag 匹配时续传；旧分片、模型版本变化或没有可用校验标识时安全重下。网络读取停滞 30 秒后超时重试，不限制持续传输的总时长。
 - 默认 2B 模型约需 2GB 空闲内存，内存较小的手机可用 `--fast`（0.8B，约 1GB）。
 - 浏览器扩展仅限桌面端：移动端浏览器不支持 Native Messaging。
 
@@ -164,7 +164,7 @@ Windows PowerShell 5.1 默认以 ASCII 向外部程序传管道、以 OEM 代码
 4. 系统目录：`/usr/local/share/qwen-translate/`、`/usr/share/qwen-translate/`（macOS 额外含 Homebrew 前缀 `/opt/homebrew/share/qwen-translate/`；Windows 为 `%ProgramData%\qwen-translate\`）——带模型的安装包就装在这里
 5. 都没有 → 自动下载到用户数据目录（默认 ModelScope）
 
-手动预下载/换变体：`scripts/download-model.sh`（支持 `VARIANT=default/fast/quality`、`MODEL_SOURCE`、`MODEL_REPO` 环境变量）。
+手动预下载/换变体：`scripts/download-model.sh`（支持 `VARIANT=default/fast/quality`、`MODEL_SOURCE`、`MODEL_REPO`、`MODEL_NAME` 环境变量）。脚本调用打包或本地构建的 translate，共用锁和续传规则；源码目录没有二进制时会通过 Cargo 构建，也可用 `TRANSLATE_BIN` 指定宿主机二进制。
 
 ## 玩法
 
