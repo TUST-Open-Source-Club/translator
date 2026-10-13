@@ -26,6 +26,7 @@ android {
         targetSdk = 35
         versionCode = Math.max(appVersionCode, 1)
         versionName = appVersion
+        testInstrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
     }
 
     signingConfigs {
@@ -64,7 +65,10 @@ android {
 
 dependencies {
     implementation project(':terminal-view')
+    implementation 'androidx.exifinterface:exifinterface:1.4.2'
     testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
 }
 
 // A release APK without the native parts would install fine and then fail to start
