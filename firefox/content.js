@@ -5,16 +5,20 @@
   window.__qwenTranslateInjected = true;
 
   let panel = null;
+  // Request currently shown in the panel; results of older requests are dropped
+  let currentId = null;
 
   function removePanel() {
     if (panel) {
       panel.remove();
       panel = null;
+      currentId = null;
     }
   }
 
-  function showPanel(text) {
+  function showPanel(id, text) {
     removePanel();
+    currentId = id;
     const sel = window.getSelection();
     let rect = null;
     if (sel && sel.rangeCount > 0) {
@@ -69,8 +73,8 @@
 
   browser.runtime.onMessage.addListener((msg) => {
     if (msg.type === "qt-show") {
-      showPanel(msg.text);
-    } else if (msg.type === "qt-result" && panel) {
+      showPanel(msg.id, msg.text);
+    } else if (msg.type === "qt-result" && panel && msg.id === currentId) {
       const result = panel.querySelector(".qt-result");
       result.classList.remove("qt-loading");
       if (msg.translation != null) {
