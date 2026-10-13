@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Result;
-use clap::{CommandFactory, Parser};
+use clap::{parser::ValueSource, CommandFactory, FromArgMatches, Parser};
 use download::{ModelSource, ModelVariant, VARIANT_DEFAULT, VARIANT_FAST, VARIANT_QUALITY};
 use err::AppError;
 use infer::{resolve_direction, Lang, SourceLang, Translator};
@@ -19,6 +19,17 @@ use infer::{resolve_direction, Lang, SourceLang, Translator};
 const ENV_MODEL: &str = "QWEN_TRANSLATE_MODEL";
 /// Add-on ID of the Firefox extension (firefox/manifest.json)
 const FIREFOX_ADDON_ID: &str = "qwen-translate@local";
+
+fn parse_threads(value: &str) -> std::result::Result<NonZeroU32, String> {
+    let threads = value
+        .parse::<u32>()
+        .map_err(|_| "threads must be a positive 32-bit integer".to_string())?;
+    if threads == 0 || threads > i32::MAX as u32 {
+        return Err(format!("threads must be between 1 and {}", i32::MAX));
+    }
+    // The inference bindings use i32 for the llama.cpp thread count.
+    Ok(NonZeroU32::new(threads).expect("nonzero checked above"))
+}
 
 #[derive(Parser)]
 #[command(
@@ -81,6 +92,14 @@ struct Args {
     #[arg(long)]
     download_only: bool,
 
+    /// Compatibility entry point for scripts/download-model.sh.
+    #[arg(
+        long,
+        hide = true,
+        conflicts_with_all = ["download_only", "native_host", "image", "text", "x", "y", "w", "h"]
+    )]
+    download_from_env: bool,
+
     /// Source language (default: auto-detect)
     #[arg(long, value_enum, default_value = "auto", env = "TRANSLATE_FROM")]
     from: SourceLang,
@@ -94,7 +113,7 @@ struct Args {
     gpu_layers: u32,
 
     /// CPU threads for inference (default: one per core; half of them on Android)
-    #[arg(long, env = "TRANSLATE_THREADS")]
+    #[arg(long, env = "TRANSLATE_THREADS", value_parser = parse_threads)]
     threads: Option<NonZeroU32>,
 
     /// llama.cpp log level
@@ -114,11 +133,23 @@ struct Args {
     y: Option<u32>,
 
     /// Width of the region to translate
-    #[arg(short = 'w', long = "width", requires = "x", requires = "y", requires = "h")]
+    #[arg(
+        short = 'w',
+        long = "width",
+        requires = "x",
+        requires = "y",
+        requires = "h"
+    )]
     w: Option<u32>,
 
     /// Height of the region to translate
-    #[arg(short = 'h', long = "height", requires = "x", requires = "y", requires = "w")]
+    #[arg(
+        short = 'h',
+        long = "height",
+        requires = "x",
+        requires = "y",
+        requires = "w"
+    )]
     h: Option<u32>,
 
     /// Disable streaming output
@@ -135,6 +166,41 @@ struct Args {
 
     /// Text to translate (read from stdin when omitted; interactive in a terminal)
     text: Vec<String>,
+}
+
+impl Args {
+    fn command_for_args(raw: &[String]) -> clap::Command {
+        let command = Self::command();
+        if raw
+            .iter()
+            .take_while(|arg| arg.as_str() != "--")
+            .any(|arg| arg == "--download-only" || arg == "--download-from-env")
+        {
+            // The old standalone download script never parsed translation
+            // settings. A stale/invalid translation default must not prevent
+            // model maintenance; explicit CLI values still get validated.
+            ["model", "from", "to", "threads"]
+                .into_iter()
+                .fold(command, |cmd, id| {
+                    cmd.mut_arg(id, |arg| arg.env(clap::builder::Resettable::Reset))
+                })
+        } else {
+            command
+        }
+    }
+
+    fn from_cli_matches(matches: &clap::ArgMatches) -> std::result::Result<Self, clap::Error> {
+        let mut args = Self::from_arg_matches(matches)?;
+        // Variant flags are aliases for --model <variant>, so they override an
+        // environment default too. Keep explicit --model values for the usual
+        // conflict check (or an explicitly supplied custom model path).
+        if (args.default || args.fast || args.quality)
+            && matches.value_source("model") != Some(ValueSource::CommandLine)
+        {
+            args.model = None;
+        }
+        Ok(args)
+    }
 }
 
 fn data_dir_path(file: &str) -> PathBuf {
@@ -160,8 +226,10 @@ fn system_paths(file: &str) -> Vec<PathBuf> {
         );
     } else if cfg!(target_os = "android") {
         // Termux keeps its "/usr" under the app's private data dir
-        let prefix = std::env::var_os("PREFIX")
-            .map_or_else(|| PathBuf::from("/data/data/com.termux/files/usr"), PathBuf::from);
+        let prefix = std::env::var_os("PREFIX").map_or_else(
+            || PathBuf::from("/data/data/com.termux/files/usr"),
+            PathBuf::from,
+        );
         dirs.push(prefix.join("share/qwen-translate"));
     } else if cfg!(target_os = "macos") {
         // Apple Silicon Homebrew / Intel Homebrew & manual installs / system packages
@@ -225,7 +293,7 @@ fn resolve_model_choice(args: &Args) -> Result<ModelChoice> {
         _ => None,
     };
     if let (Some(f), Some(k)) = (flag_variant, kw_variant) {
-        if !std::ptr::eq(f, k) {
+        if f.model_file != k.model_file {
             return Err(err::usage(format!(
                 "conflicting model variants: --{} vs --model {}",
                 if args.fast {
@@ -264,6 +332,27 @@ fn ensure_model(choice: &ModelChoice, source: ModelSource) -> Result<()> {
     }
     download::download_model(choice.variant, &choice.path, source)
         .map_err(|e| err::or_kind(e, AppError::Download))
+}
+
+/// Explicit projectors must already exist: a custom model path tells us nothing
+/// about the compatible projector, even when a built-in variant is also selected.
+fn resolve_mmproj(args: &Args, choice: &ModelChoice) -> Result<PathBuf> {
+    if let Some(path) = &args.mmproj {
+        if !path.is_file() {
+            return Err(err::model(format!(
+                "mmproj file not found: {}\n(paths set via --mmproj are not auto-downloaded; please check the path)",
+                path.display()
+            )));
+        }
+        return Ok(path.clone());
+    }
+    if choice.explicit {
+        return Err(err::usage(
+            "--image with a custom --model also requires --mmproj \
+             (the projector weights must match the model)",
+        ));
+    }
+    Ok(resolve_named_file(choice.variant.mmproj_file))
 }
 
 fn no_input() -> ! {
@@ -317,12 +406,13 @@ fn run() -> Result<()> {
         .skip(1)
         .filter_map(|a| a.into_string().ok())
         .collect();
-    let args = if is_browser_launch(&raw) {
+    let matches = if is_browser_launch(&raw) {
         // Browser-supplied arguments are not ours; options come from env vars
-        Args::parse_from(["translate", "--native-host"])
+        Args::command().get_matches_from(["translate", "--native-host"])
     } else {
-        Args::parse()
+        Args::command_for_args(&raw).get_matches()
     };
+    let args = Args::from_cli_matches(&matches).unwrap_or_else(|e| e.exit());
     logging::init(args.log_level);
 
     // --model-source wins over --huggingface; default is ModelScope
@@ -331,6 +421,10 @@ fn run() -> Result<()> {
     } else {
         ModelSource::ModelScope
     });
+
+    if args.download_from_env {
+        return download::download_from_env(model_source);
+    }
 
     if args.download_only {
         // Pure download mode: only the variant flags and download-source flags apply;
@@ -379,20 +473,9 @@ fn run() -> Result<()> {
                 "image mode does not accept text input (the text comes from the image itself)",
             ));
         }
+        let mmproj = resolve_mmproj(&args, &choice)?;
         ensure_model(&choice, model_source)?;
-        let mmproj = match &args.mmproj {
-            Some(p) => p.clone(),
-            None => {
-                if choice.explicit {
-                    return Err(err::usage(
-                        "--image with a custom --model also requires --mmproj \
-                         (the projector weights must match the model)",
-                    ));
-                }
-                resolve_named_file(choice.variant.mmproj_file)
-            }
-        };
-        if !mmproj.is_file() {
+        if args.mmproj.is_none() && !mmproj.is_file() {
             download::download_mmproj(choice.variant, &mmproj, model_source)
                 .map_err(|e| err::or_kind(e, AppError::Download))?;
         }
@@ -403,12 +486,15 @@ fn run() -> Result<()> {
             (Some(x), Some(y), Some(w), Some(h)) => Some((x, y, w, h)),
             _ => None,
         };
-        let out = translator.translate_image(image_path, region, source, args.to, !args.no_stream)?;
+        let out =
+            translator.translate_image(image_path, region, source, args.to, !args.no_stream)?;
         return print_result(&out, !args.no_stream);
     }
 
     if args.x.is_some() || args.y.is_some() || args.w.is_some() || args.h.is_some() {
-        return Err(err::usage("-x/-y/-w/-h can only be used together with --image"));
+        return Err(err::usage(
+            "-x/-y/-w/-h can only be used together with --image",
+        ));
     }
 
     let text = if !args.text.is_empty() {
@@ -448,7 +534,11 @@ fn interactive(
     let translator = Translator::load(&choice.path, args.gpu_layers, args.threads)
         .map_err(|e| err::or_kind(e, AppError::Model))?;
     let mut session = translator.text_session()?;
-    let eof = if cfg!(windows) { "Ctrl+Z, Enter" } else { "Ctrl+D" };
+    let eof = if cfg!(windows) {
+        "Ctrl+Z, Enter"
+    } else {
+        "Ctrl+D"
+    };
     eprintln!("Type text and press Enter to translate it; {eof} to quit.");
     let mut stdin = std::io::stdin().lock();
     let mut line = Vec::new();
@@ -495,7 +585,115 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::is_browser_launch;
+    use super::*;
+
+    #[test]
+    fn thread_count_stays_representable_for_llama() {
+        assert_eq!(parse_threads("1").unwrap().get(), 1);
+        assert_eq!(
+            parse_threads(i32::MAX.to_string().as_str()).unwrap().get(),
+            i32::MAX as u32
+        );
+        assert!(parse_threads("0").is_err());
+        assert!(parse_threads((i32::MAX as u64 + 1).to_string().as_str()).is_err());
+        assert!(parse_threads("not-a-number").is_err());
+    }
+
+    fn args_with_model_default(args: &[&str], model: Option<&'static str>) -> Args {
+        let mut cmd = Args::command();
+        // Command defaults exercise the same lower-priority branch as env values
+        // without mutating the process environment of concurrent tests.
+        for id in ["model", "from", "to", "threads"] {
+            cmd = cmd.mut_arg(id, |a| a.env(None::<&str>));
+        }
+        if let Some(model) = model {
+            cmd = cmd.mut_arg("model", |a| a.default_value(model));
+        }
+        let matches = cmd
+            .try_get_matches_from(std::iter::once("translate").chain(args.iter().copied()))
+            .unwrap();
+        Args::from_cli_matches(&matches).unwrap()
+    }
+
+    #[test]
+    fn variant_flags_override_model_defaults() {
+        for model in ["fast", "/missing/custom.gguf"] {
+            for (flag, expected) in [
+                ("--default", &VARIANT_DEFAULT),
+                ("--fast", &VARIANT_FAST),
+                ("--quality", &VARIANT_QUALITY),
+            ] {
+                let args = args_with_model_default(&[flag, "hello"], Some(model));
+                let choice = resolve_model_choice(&args).unwrap();
+                assert!(!choice.explicit);
+                assert_eq!(choice.variant.model_file, expected.model_file);
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_model_choices_keep_their_precedence_and_conflicts() {
+        let args = args_with_model_default(&["--model", "quality"], Some("fast"));
+        let choice = resolve_model_choice(&args).unwrap();
+        assert_eq!(choice.variant.model_file, VARIANT_QUALITY.model_file);
+
+        let args = args_with_model_default(&["--quality", "--model", "fast"], None);
+        assert!(resolve_model_choice(&args).is_err());
+        let args = args_with_model_default(&["--fast", "--model", "fast"], None);
+        assert!(resolve_model_choice(&args).is_ok());
+
+        let args = args_with_model_default(&["--fast", "--model", "custom.gguf"], Some("quality"));
+        let choice = resolve_model_choice(&args).unwrap();
+        assert!(choice.explicit);
+        assert_eq!(choice.path, PathBuf::from("custom.gguf"));
+
+        let args = args_with_model_default(&[], Some("quality"));
+        assert_eq!(
+            resolve_model_choice(&args).unwrap().variant.model_file,
+            VARIANT_QUALITY.model_file
+        );
+    }
+
+    #[test]
+    fn explicit_projector_must_exist_and_custom_models_require_one() {
+        let mut args = args_with_model_default(&["--model", "custom.gguf"], None);
+        let choice = resolve_model_choice(&args).unwrap();
+        assert_eq!(
+            err::exit_code(&resolve_mmproj(&args, &choice).unwrap_err()),
+            2
+        );
+
+        let missing = std::env::temp_dir().join(format!(
+            "translate-missing-projector-{}-{}.gguf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        args.mmproj = Some(missing.clone());
+        assert_eq!(
+            err::exit_code(&resolve_mmproj(&args, &choice).unwrap_err()),
+            3
+        );
+        assert!(!missing.exists());
+
+        // Resolution checks existence; the actual model loader checks its format.
+        let existing = std::env::current_exe().unwrap();
+        args.mmproj = Some(existing.clone());
+        assert_eq!(resolve_mmproj(&args, &choice).unwrap(), existing);
+
+        let mut args = args_with_model_default(&["--fast"], None);
+        let choice = resolve_model_choice(&args).unwrap();
+        assert!(resolve_mmproj(&args, &choice)
+            .unwrap()
+            .ends_with(VARIANT_FAST.mmproj_file));
+        args.mmproj = Some(missing);
+        assert_eq!(
+            err::exit_code(&resolve_mmproj(&args, &choice).unwrap_err()),
+            3
+        );
+    }
 
     fn launch(args: &[&str]) -> bool {
         is_browser_launch(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())

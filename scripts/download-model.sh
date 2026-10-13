@@ -1,94 +1,32 @@
 #!/usr/bin/env bash
-# Download the GGUF model + mmproj projector weights into the platform data dir.
-# Downloads from ModelScope by default; MODEL_SOURCE=huggingface for HuggingFace.
-# VARIANT=default (2B) | fast (0.8B) | quality (4B); default is "default".
+# Share automatic downloads' file lock, HTTP validators and retry policy.
+# VARIANT=default|fast|quality; MODEL_SOURCE=modelscope|huggingface;
+# MODEL_REPO and MODEL_NAME retain the pre-download override interface.
 set -euo pipefail
-
-VARIANT="${VARIANT:-default}"
-case "$VARIANT" in
-  default)
-    REPO="unsloth/Qwen3.5-2B-GGUF"
-    MODEL_NAME="Qwen3.5-2B-Q4_K_M.gguf"
-    MMPROJ_LOCAL="Qwen3.5-2B-mmproj-F16.gguf"
-    ;;
-  fast)
-    REPO="unsloth/Qwen3.5-0.8B-GGUF"
-    MODEL_NAME="Qwen3.5-0.8B-Q4_K_M.gguf"
-    MMPROJ_LOCAL="mmproj-F16.gguf"
-    ;;
-  quality)
-    REPO="unsloth/Qwen3.5-4B-GGUF"
-    MODEL_NAME="Qwen3.5-4B-Q4_K_M.gguf"
-    MMPROJ_LOCAL="Qwen3.5-4B-mmproj-F16.gguf"
-    ;;
-  *)
-    echo "VARIANT must be default, fast or quality" >&2
-    exit 1
-    ;;
-esac
-REPO="${MODEL_REPO:-$REPO}"
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 SOURCE="${MODEL_SOURCE:-modelscope}"
-MMPROJ_REMOTE="mmproj-F16.gguf"
-
-case "$(uname -s)" in
-  Darwin) DEST_DIR="$HOME/Library/Application Support/qwen-translate" ;;
-  # Git Bash / MSYS2 / Cygwin on Windows: %LOCALAPPDATA%\qwen-translate
-  MINGW* | MSYS* | CYGWIN*) DEST_DIR="$(cygpath -u "$LOCALAPPDATA")/qwen-translate" ;;
-  *) DEST_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/qwen-translate" ;;
+case "$SOURCE" in
+  modelscope|huggingface|hf) ;;
+  *) echo "MODEL_SOURCE must be modelscope or huggingface" >&2; exit 1 ;;
 esac
-mkdir -p "$DEST_DIR"
-
-download_one() {
-  local remote="$1" local_name="$2"
-  local dest="$DEST_DIR/$local_name"
-  if [[ -f "$dest" ]]; then
-    echo "Already exists: $dest" >&2
-    return 0
+# TRANSLATE_BIN also supports custom CARGO_TARGET_DIR / cross-build host tools.
+if [[ -n "${TRANSLATE_BIN:-}" ]]; then
+  exec "$TRANSLATE_BIN" --download-from-env --model-source "$SOURCE"
+fi
+for bin in "$ROOT/translate" "$ROOT/translate.exe" \
+           "$ROOT/target/release/translate" "$ROOT/target/release/translate.exe"; do
+  # Source updates may leave an older release binary behind. Check support
+  # without downloading anything before handing control to it.
+  if [[ -x "$bin" ]] && "$bin" --download-from-env --help >/dev/null 2>&1; then
+    exec "$bin" --download-from-env --model-source "$SOURCE"
   fi
-
-  local urls=()
-  case "$SOURCE" in
-    modelscope)
-      urls=("https://modelscope.cn/models/$REPO/resolve/master/$remote")
-      ;;
-    huggingface|hf)
-      urls=(
-        "https://hf-mirror.com/$REPO/resolve/main/$remote"
-        "https://huggingface.co/$REPO/resolve/main/$remote"
-      )
-      ;;
-    *)
-      echo "MODEL_SOURCE must be modelscope or huggingface" >&2
-      exit 1
-      ;;
-  esac
-
-  # A partial download is kept in $dest.tmp and resumed (-C -) on the next attempt;
-  # one older than a day may stem from an older upload of the model: start over
-  if [[ -n "$(find "$dest.tmp" -mtime +0 2>/dev/null)" ]]; then
-    rm -f "$dest.tmp"
-  fi
-  local url rc
-  for url in "${urls[@]}"; do
-    echo "Downloading: $url" >&2
-    rc=0
-    curl -fL --connect-timeout 15 --retry 3 --retry-delay 2 -C - -o "$dest.tmp" "$url" || rc=$?
-    if [[ $rc -eq 33 ]]; then
-      # Server ignores Range requests: start over
-      rm -f "$dest.tmp"
-      rc=0
-      curl -fL --connect-timeout 15 --retry 3 --retry-delay 2 -o "$dest.tmp" "$url" || rc=$?
-    fi
-    if [[ $rc -eq 0 ]]; then
-      mv "$dest.tmp" "$dest"
-      echo "Done: $dest" >&2
-      return 0
-    fi
-  done
-
-  echo "Download failed: $remote (rerun to resume the partial download)" >&2
-  return 1
-}
-
-download_one "$MODEL_NAME" "$MODEL_NAME"
-download_one "$MMPROJ_REMOTE" "$MMPROJ_LOCAL"
+done
+if [[ -f "$ROOT/Cargo.toml" ]] && command -v cargo >/dev/null 2>&1; then
+  exec cargo run --locked --release --manifest-path "$ROOT/Cargo.toml" -- \
+    --download-from-env --model-source "$SOURCE"
+fi
+if command -v translate >/dev/null 2>&1; then
+  exec translate --download-from-env --model-source "$SOURCE"
+fi
+echo "translate binary not found; build the project or run this script from a release package." >&2
+exit 1

@@ -16,6 +16,9 @@ anyhow = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive", "env"] }
 image = "0.25"
+# One downloader for the CLI, native host, Android and pre-download script.
+# The idle-timeout transport adapter uses ureq's unversioned transport API.
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
 
 # Linux/macOS: OpenMP threading (llama-cpp-2's default). Windows uses ggml's own
 # thread pool: MSVC's OpenMP runtime (vcomp140.dll) needs the VC++ redistributable,
@@ -27,13 +30,6 @@ llama-cpp-2 = { version = "0.1", default-features = false, features = ["openmp"]
 # ship neither libc++_shared.so nor libomp.so; the binary then runs as-is (Termux, adb)
 [target.'cfg(target_os = "android")'.dependencies]
 llama-cpp-2 = { version = "0.1", default-features = false, features = ["android-static-stdcxx"] }
-# Stock Android has no curl (only Termux does): model downloads go over this HTTPS client
-ureq = { version = "3", default-features = false, features = ["rustls"] }
-
-[dev-dependencies]
-# Lets the Android downloader's tests run on the build host
-ureq = { version = "3", default-features = false, features = ["rustls"] }
-
 [features]
 default = ["mtmd"]
 mtmd = ["llama-cpp-2/mtmd", "llama-cpp-sys-2/mtmd"]
