@@ -62,18 +62,26 @@ download_one() {
       ;;
   esac
 
-  local url
+  # A partial download is kept in $dest.tmp and resumed (-C -) on the next attempt
+  local url rc
   for url in "${urls[@]}"; do
     echo "Downloading: $url" >&2
-    if curl -fL --connect-timeout 15 -o "$dest.tmp" "$url"; then
+    rc=0
+    curl -fL --connect-timeout 15 --retry 3 --retry-delay 2 -C - -o "$dest.tmp" "$url" || rc=$?
+    if [[ $rc -eq 33 ]]; then
+      # Server ignores Range requests: start over
+      rm -f "$dest.tmp"
+      rc=0
+      curl -fL --connect-timeout 15 --retry 3 --retry-delay 2 -o "$dest.tmp" "$url" || rc=$?
+    fi
+    if [[ $rc -eq 0 ]]; then
       mv "$dest.tmp" "$dest"
       echo "Done: $dest" >&2
       return 0
     fi
   done
 
-  rm -f "$dest.tmp"
-  echo "Download failed: $remote" >&2
+  echo "Download failed: $remote (rerun to resume the partial download)" >&2
   return 1
 }
 
