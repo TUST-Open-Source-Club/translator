@@ -92,7 +92,11 @@ public final class TerminalActivity extends Activity implements Sessions.Listene
             return true;
         });
 
-        if (sessions.isEmpty()) sessions.startShell(true);
+        if (sessions.isEmpty()) {
+            String action = getIntent().getAction();
+            boolean external = Intent.ACTION_SEND.equals(action) || Intent.ACTION_PROCESS_TEXT.equals(action);
+            sessions.startShell(!external);
+        }
         // Not again when recreated: the request was handled already
         if (state == null) handleIntent(getIntent());
         askForNotifications();
@@ -164,15 +168,23 @@ public final class TerminalActivity extends Activity implements Sessions.Listene
     private void translateImage(Uri uri) {
         Context app = getApplicationContext();
         Handler main = new Handler(Looper.getMainLooper());
-        new Thread(() -> {
+        int generation = sessions.generation();
+        if (!Images.execute(() -> {
             try {
+                // Do not start another potentially large decode after Exit has
+                // cancelled the batch while this job was waiting in the queue.
+                if (Sessions.get(app).generation() != generation) return;
                 File image = Images.importImage(app, uri);
-                main.post(() -> Sessions.get(app).startTranslate(Arrays.asList("--image", image.getPath())));
+                main.post(() -> {
+                    Sessions owner = Sessions.get(app);
+                    if (owner.generation() == generation) owner.startTranslate(Arrays.asList("--image", image.getPath()));
+                    else image.delete(); // Exit cancels imports that were still in flight.
+                });
             } catch (IOException | RuntimeException | OutOfMemoryError e) {
                 String msg = app.getString(R.string.image_failed, String.valueOf(e.getMessage()));
                 main.post(() -> Toast.makeText(app, msg, Toast.LENGTH_LONG).show());
             }
-        }, "image-import").start();
+        })) Toast.makeText(app, app.getString(R.string.image_failed, "too many pending images"), Toast.LENGTH_LONG).show();
     }
 
     @SuppressWarnings("deprecation") // the typed variant needs Android 13

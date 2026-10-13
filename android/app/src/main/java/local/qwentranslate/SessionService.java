@@ -74,7 +74,10 @@ public final class SessionService extends Service {
 
     @Override
     public void onDestroy() {
-        current = null;
+        if (current == this) {
+            current = null;
+            getSystemService(NotificationManager.class).cancel(NOTIFICATION);
+        }
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         super.onDestroy();
     }
@@ -87,6 +90,10 @@ public final class SessionService extends Service {
     /** New notification text, or the end of the service once no session is left. */
     private void refresh() {
         if (Sessions.get(this).isEmpty()) {
+            // A new session may be added before onDestroy is delivered. It must
+            // request a fresh start, rather than update a service already stopping.
+            if (current == this) current = null;
+            stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelf();
             return;
         }

@@ -7,6 +7,7 @@ import android.content.Context;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.util.Log;
+import android.widget.Toast;
 
 import com.termux.terminal.TerminalSession;
 import com.termux.terminal.TerminalSessionClient;
@@ -64,12 +65,19 @@ final class Sessions implements TerminalSessionClient {
     private final Set<TerminalSession> tasks = new HashSet<>();
     private int current = -1;
     private Listener listener;
+    // Image import workers read this after Exit is handled on the main thread.
+    // Volatile makes cancellation visible without exposing the session lists to
+    // background threads.
+    private volatile int generation;
+
+    int generation() { return generation; }
 
     private Sessions(Context app) {
         this.app = app;
         home = new File(app.getFilesDir(), "home");
         prefix = new File(app.getFilesDir(), "usr");
         install();
+        SettingsMigration.migrate(app, home);
         Images.cleanUp(app);
     }
 
@@ -140,11 +148,13 @@ final class Sessions implements TerminalSessionClient {
      * the wrapper alive when Ctrl+C ends translate (and is reset for translate itself).
      */
     TerminalSession startShell(boolean translate) {
-        String[] args = translate
-                ? new String[] {"sh", "-c", "trap echo INT; export QWEN_TRANSLATE_MOTD=1; "
-                        + "cat \"$PREFIX/etc/motd\"; \"$QWEN_TRANSLATE_BIN\"; exec '" + shell + "' -l"}
-                : new String[] {"-sh"};
-        TerminalSession s = new TerminalSession(shell, home.getPath(), args, environment(), null, this);
+        String[] env = environment();
+        if (translate) {
+            List<String> values = new ArrayList<>(java.util.Arrays.asList(env));
+            values.add("QWEN_TRANSLATE_START=1");
+            env = values.toArray(new String[0]);
+        }
+        TerminalSession s = new TerminalSession(shell, home.getPath(), new String[] {"-sh"}, env, null, this);
         s.mSessionName = "sh";
         add(s);
         return s;
@@ -156,21 +166,27 @@ final class Sessions implements TerminalSessionClient {
      * such sessions that have finished are closed first.
      */
     TerminalSession startTranslate(List<String> args) {
-        for (TerminalSession t : new ArrayList<>(tasks)) {
-            if (!t.isRunning()) remove(t);
-        }
-        String[] argv = new String[args.size() + 1];
-        argv[0] = "translate";
-        for (int i = 0; i < args.size(); i++) argv[i + 1] = args.get(i);
-        TerminalSession s = new TerminalSession(binary().getPath(), home.getPath(), argv,
-                environment(), null, this);
+        List<TerminalSession> finished = new ArrayList<>();
+        for (TerminalSession t : tasks) if (!t.isRunning()) finished.add(t);
+        // Positional arguments keep shared text entirely separate from shell syntax.
+        String[] argv = new String[args.size() + 4];
+        argv[0] = "sh";
+        argv[1] = "-c";
+        argv[2] = "[ ! -r \"$HOME/.mkshrc\" ] || . \"$HOME/.mkshrc\"; exec \"$QWEN_TRANSLATE_BIN\" \"$@\"";
+        argv[3] = "translate";
+        for (int i = 0; i < args.size(); i++) argv[i + 4] = args.get(i);
+        TerminalSession s = new TerminalSession(shell, home.getPath(), argv, environment(), null, this);
         s.mSessionName = "translate";
         tasks.add(s);
+        // Install the replacement before removing finished tasks: observers never see zero.
         add(s);
+        for (TerminalSession t : finished) remove(t);
         return s;
     }
 
     private void add(TerminalSession s) {
+        // An image import can finish while no Activity/view is attached.
+        s.updateSize(80, 24, 8, 16);
         sessions.add(s);
         current = sessions.size() - 1;
         SessionService.update(app);
@@ -203,6 +219,7 @@ final class Sessions implements TerminalSessionClient {
 
     /** The notification's Exit button. */
     void removeAll() {
+        generation++; // cancel pending image imports as well as established sessions
         for (TerminalSession s : new ArrayList<>(sessions)) remove(s);
     }
 
@@ -263,7 +280,12 @@ final class Sessions implements TerminalSessionClient {
         ClipData clip = app.getSystemService(ClipboardManager.class).getPrimaryClip();
         if (clip == null || clip.getItemCount() == 0 || session.getEmulator() == null) return;
         CharSequence text = clip.getItemAt(0).coerceToText(app);
-        if (text != null) session.getEmulator().paste(text.toString());
+        if (text != null && text.length() > 0) session.getEmulator().paste(text.toString());
+    }
+
+    @Override
+    public void onInputRejected(TerminalSession session) {
+        Toast.makeText(app, R.string.input_queue_full, Toast.LENGTH_LONG).show();
     }
 
     @Override

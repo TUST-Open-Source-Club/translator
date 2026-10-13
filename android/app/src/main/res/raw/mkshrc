@@ -22,3 +22,10 @@ models() {
 }
 
 [ -r "$HOME/.mkshrc" ] && . "$HOME/.mkshrc"
+
+# Only the initial app shell starts interactive translation. Clear the flag before
+# launching it so nested shells never restart the model. User settings are loaded.
+if [ "$QWEN_TRANSLATE_START" = 1 ]; then
+    unset QWEN_TRANSLATE_START
+    "$QWEN_TRANSLATE_BIN"
+fi

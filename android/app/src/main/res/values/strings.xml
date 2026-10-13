@@ -52,4 +52,5 @@ Keys: ESC ^C ^D TAB arrows, IMAGE, PASTE; the
 last one switches sessions (long press: new shell).
 
 "</string>
+    <string name="input_queue_full">Input was not sent: too much pending input. Wait for the command or press Ctrl+C, then paste a smaller portion.</string>
 </resources>

@@ -39,4 +39,5 @@ translate --help 查看全部选项，例如：
 最后一个键切换会话（长按新建 shell）。
 
 "</string>
+    <string name="input_queue_full">待处理输入过多，本次输入未发送。请等待命令处理或按 Ctrl+C，再分段粘贴。</string>
 </resources>
