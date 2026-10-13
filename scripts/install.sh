@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # This script lives in <package>/scripts/
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 
 TERMUX=false
 if [[ -n "${TERMUX_VERSION:-}" || "${PREFIX:-}" == */com.termux/* ]]; then
@@ -40,10 +40,6 @@ if (( ${#models[@]} )); then
   done
 else
   echo "This package has no bundled model; it will be auto-downloaded on first run (via ModelScope)."
-  # The Android build downloads by itself; elsewhere the system curl is used
-  if ! $TERMUX && ! command -v curl >/dev/null 2>&1; then
-    echo "Note: the download needs curl; install it with your package manager"
-  fi
 fi
 
 case ":$PATH:" in

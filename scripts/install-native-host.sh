@@ -9,7 +9,7 @@ FIREFOX_EXT_ID="qwen-translate@local"
 # Fixed by the "key" in chrome/manifest.json
 CHROME_EXT_ID="bfkmmaobjaldoelkdphajjagomjehbpc"
 
-PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PROJECT_ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 if [[ $# -ge 1 ]]; then
   BIN="$1"
 elif [[ -x "$PROJECT_ROOT/target/release/translate" ]]; then
@@ -26,7 +26,21 @@ else
   echo "translate binary not found; run cargo build --release first or pass the path" >&2
   exit 1
 fi
-BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
+# Preserve a legal trailing newline when resolving the binary directory.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    BIN="$(cygpath -u -- "$BIN" && printf .)"
+    BIN="${BIN%.}"
+    # cygpath adds one record-terminating newline of its own.
+    BIN="${BIN%$'\n'}"
+    ;;
+esac
+BIN_NAME="${BIN##*/}"
+BIN_DIR="${BIN%/*}"
+[[ "$BIN_DIR" == "$BIN" ]] && BIN_DIR=.
+[[ -n "$BIN_DIR" ]] || BIN_DIR=/
+BIN_DIR="$(CDPATH= cd -- "$BIN_DIR" && printf '%s.' "$PWD")"
+BIN="${BIN_DIR%.}/$BIN_NAME"
 
 if [[ "$(uname)" == "Darwin" ]]; then
   SUPPORT="$HOME/Library/Application Support"
@@ -55,11 +69,37 @@ mkdir -p "$DATA_DIR"
 
 # The manifest "path" cannot carry arguments; use a wrapper to add --native-host
 WRAPPER="$DATA_DIR/native-host.sh"
-cat > "$WRAPPER" <<WRAP
-#!/bin/sh
-exec "$BIN" --native-host "\$@"
-WRAP
+# Quote a path as literal POSIX shell data, including dollars and single quotes.
+shell_quote() {
+  local escaped="${1//\'/\'\\\'\'}"
+  printf "'%s'" "$escaped"
+}
+{
+  printf '#!/bin/sh\nexec '
+  shell_quote "$BIN"
+  printf ' --native-host "$@"\n'
+} > "$WRAPPER"
 chmod +x "$WRAPPER"
+
+# Native Messaging manifests need JSON escaping independently of shell quoting.
+json_quote() {
+  local value="$1" char code i
+  local LC_ALL=C
+  printf '"'
+  for ((i=0; i<${#value}; i++)); do
+    char="${value:i:1}"
+    case "$char" in
+      '"') printf '\\"' ;;
+      '\') printf '\\\\' ;;
+      *)
+        printf -v code '%d' "'$char"
+        if ((code < 32)); then printf '\\u%04x' "$code"; else printf '%s' "$char"; fi
+        ;;
+    esac
+  done
+  printf '"'
+}
+WRAPPER_JSON="$(json_quote "$WRAPPER")"
 
 # Firefox: allowed_extensions holds add-on IDs
 mkdir -p "$FIREFOX_HOST_DIR"
@@ -67,7 +107,7 @@ cat > "$FIREFOX_HOST_DIR/$HOST_NAME.json" <<JSON
 {
   "name": "$HOST_NAME",
   "description": "Local translation native messaging host (Qwen)",
-  "path": "$WRAPPER",
+  "path": $WRAPPER_JSON,
   "type": "stdio",
   "allowed_extensions": ["$FIREFOX_EXT_ID"]
 }
@@ -85,7 +125,7 @@ for root in "${CHROMIUM_ROOTS[@]}"; do
 {
   "name": "$HOST_NAME",
   "description": "Local translation native messaging host (Qwen)",
-  "path": "$WRAPPER",
+  "path": $WRAPPER_JSON,
   "type": "stdio",
   "allowed_origins": ["chrome-extension://$CHROME_EXT_ID/"]
 }
