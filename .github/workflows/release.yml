@@ -42,12 +42,22 @@ jobs:
           echo "RUSTFLAGS=-C target-feature=+crt-static" >> "$GITHUB_ENV"
           echo "LLAMA_STATIC_CRT=1" >> "$GITHUB_ENV"
           # llama.cpp's CMake takes the runtime from CMAKE_MSVC_RUNTIME_LIBRARY (see the file)
-          echo "CMAKE_TOOLCHAIN_FILE=$(cygpath -m "$PWD/scripts/msvc-static-crt.cmake")" >> "$GITHUB_ENV"
+          echo "CMAKE_TOOLCHAIN_FILE=$(cygpath -m "$PWD/scripts/msvc-release.cmake")" >> "$GITHUB_ENV"
+
+      - name: Generic Linux x86_64 CPU baseline
+        if: runner.os == 'Linux'
+        run: echo "CMAKE_TOOLCHAIN_FILE=$PWD/scripts/x86-baseline.cmake" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-${{ hashFiles('scripts/*.cmake') }}
 
       - name: Build
-        run: cargo build --release ${{ matrix.cargo_flags }}
+        run: cargo build --locked --release ${{ matrix.cargo_flags }}
+
+      - name: Verify generated x86_64 CPU baseline
+        if: runner.os != 'macOS'
+        run: python tests/check_x86_baseline.py
 
       - name: Strip binary
         if: runner.os != 'Windows'
@@ -99,42 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo gem install fpm --no-document
-          VER="${GITHUB_REF_NAME#v}"
-          # rpm/pacman package versions may not contain '-'
-          PKG_VER="${VER//-/.}"
-          MODEL_DIR="$HOME/.local/share/qwen-translate"
-          rm -rf pkgroot
-          mkdir -p pkgroot/usr/bin pkgroot/usr/share/qwen-translate
-          cp target/release/translate pkgroot/usr/bin/
-          cp -r firefox chrome scripts README.md README.zh-CN.md LICENSE pkgroot/usr/share/qwen-translate/
-
-          FPM_COMMON="-s dir -C pkgroot --license GPL-3.0-only \
-            --maintainer TUST-Open-Source-Club \
-            --url https://github.com/TUST-Open-Source-Club/translator"
-          # without model: auto-download on first run
-          fpm $FPM_COMMON -v "$VER" -n qwen-translate -t deb    --depends libvulkan1 \
-            --description 'Local offline translation CLI (Qwen3.5-0.8B + llama.cpp); model auto-downloads on first run' \
-            -p "dist/qwen-translate_${VER}_amd64.deb"
-          fpm $FPM_COMMON -v "$PKG_VER" -n qwen-translate -t rpm    --depends vulkan-loader \
-            --description 'Local offline translation CLI (Qwen3.5-0.8B + llama.cpp); model auto-downloads on first run' \
-            -p "dist/qwen-translate-${PKG_VER}-1.x86_64.rpm"
-          fpm $FPM_COMMON -v "$PKG_VER" -n qwen-translate -t pacman --depends vulkan-icd-loader \
-            --description 'Local offline translation CLI (Qwen3.5-0.8B + llama.cpp); model auto-downloads on first run' \
-            -p "dist/qwen-translate-${PKG_VER}-1-x86_64.pkg.tar.zst"
-          # with model: installed to /usr/share/qwen-translate/ (global lookup path), works offline
-          cp "$MODEL_DIR/Qwen3.5-2B-Q4_K_M.gguf" "$MODEL_DIR/Qwen3.5-2B-mmproj-F16.gguf" pkgroot/usr/share/qwen-translate/
-          fpm $FPM_COMMON -v "$VER" -n qwen-translate-full -t deb    --depends libvulkan1 \
-            --conflicts qwen-translate \
-            --description 'Local offline translation CLI (Qwen3.5-0.8B + llama.cpp), model bundled' \
-            -p "dist/qwen-translate-full_${VER}_amd64.deb"
-          fpm $FPM_COMMON -v "$PKG_VER" -n qwen-translate-full -t rpm    --depends vulkan-loader \
-            --conflicts qwen-translate \
-            --description 'Local offline translation CLI (Qwen3.5-0.8B + llama.cpp), model bundled' \
-            -p "dist/qwen-translate-full-${PKG_VER}-1.x86_64.rpm"
-          fpm $FPM_COMMON -v "$PKG_VER" -n qwen-translate-full -t pacman --depends vulkan-icd-loader \
-            --conflicts qwen-translate \
-            --description 'Local offline translation CLI (Qwen3.5-0.8B + llama.cpp), model bundled' \
-            -p "dist/qwen-translate-full-${PKG_VER}-1-x86_64.pkg.tar.zst"
+          python3 scripts/package-linux.py "$GITHUB_REF_NAME"
           ls -lh dist
 
       - uses: actions/upload-artifact@v4
@@ -168,6 +143,9 @@ jobs:
           export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--target=aarch64-linux-android24"
           cargo build --release --target aarch64-linux-android
           "$TC/llvm-strip" target/aarch64-linux-android/release/translate
+
+      - name: Build host downloader for Android package assembly
+        run: cargo build --locked --release
 
       - name: Download model (for the model-bundled package)
         run: MODEL_SOURCE=huggingface bash scripts/download-model.sh

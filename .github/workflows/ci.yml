@@ -41,12 +41,27 @@ jobs:
           echo "RUSTFLAGS=-C target-feature=+crt-static" >> "$GITHUB_ENV"
           echo "LLAMA_STATIC_CRT=1" >> "$GITHUB_ENV"
           # llama.cpp's CMake takes the runtime from CMAKE_MSVC_RUNTIME_LIBRARY (see the file)
-          echo "CMAKE_TOOLCHAIN_FILE=$(cygpath -m "$PWD/scripts/msvc-static-crt.cmake")" >> "$GITHUB_ENV"
+          echo "CMAKE_TOOLCHAIN_FILE=$(cygpath -m "$PWD/scripts/msvc-release.cmake")" >> "$GITHUB_ENV"
+
+      - name: Generic Linux x86_64 CPU baseline
+        if: runner.os == 'Linux'
+        run: echo "CMAKE_TOOLCHAIN_FILE=$PWD/scripts/x86-baseline.cmake" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # llama-cpp-sys does not watch the contents of external CMake files.
+          key: desktop-${{ hashFiles('scripts/*.cmake') }}
 
       - name: Build
-        run: cargo build --release ${{ matrix.cargo_flags }}
+        run: cargo build --locked --release ${{ matrix.cargo_flags }}
+
+      - name: Verify generated x86_64 CPU baseline
+        if: runner.os != 'macOS'
+        run: python tests/check_x86_baseline.py
+
+      - name: Windows shell installer regressions
+        if: runner.os == 'Windows'
+        run: python tests/shell_regressions.py
 
       - name: Unit tests
         run: cargo test --release ${{ matrix.cargo_flags }}
@@ -140,6 +155,19 @@ jobs:
           for f in firefox/*.js; do node --check "$f"; done
           python3 -m json.tool firefox/manifest.json > /dev/null
           python3 -m json.tool chrome/manifest.json > /dev/null
+
+      - name: Selection regression checks (API and DOM doubles)
+        run: node tests/extension_selection.cjs
+
+      - name: Installer and download script regressions
+        run: python3 tests/shell_regressions.py
+
+      - name: Linux packaging regression checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-rpm pacman-package-manager rpm ruby ruby-dev build-essential libarchive-tools zstd
+          sudo gem install fpm --no-document
+          /usr/bin/python3 tests/linux_packages.py --require-comparators --integration
 
       - name: Pack CRX with a throwaway key (format check)
         run: |
