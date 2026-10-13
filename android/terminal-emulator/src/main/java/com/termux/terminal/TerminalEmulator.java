@@ -2575,16 +2575,42 @@ public final class TerminalEmulator {
 
     /** If DECSET 2004 is set, prefix paste with "\033[200~" and suffix with "\033[201~". */
     public void paste(String text) {
-        // First: Always remove escape key and C1 control characters [0x80,0x9F]:
-        text = text.replaceAll("(\u001B|[\u0080-\u009F])", "");
-        // Second: Replace all newlines (\n) or CRLF (\r\n) with carriage returns (\r).
-        text = text.replaceAll("\r?\n", "\r");
-
-        // Then: Implement bracketed paste mode if enabled:
         boolean bracketed = isDecsetInternalBitSet(DECSET_BIT_BRACKETED_PASTE_MODE);
-        if (bracketed) mSession.write("\033[200~");
-        mSession.write(text);
-        if (bracketed) mSession.write("\033[201~");
+        String prefix = bracketed ? "\033[200~" : "";
+        String suffix = bracketed ? "\033[201~" : "";
+        if (text == null) return;
+        long limit = TerminalInputQueue.MAX_BYTES - prefix.length() - suffix.length();
+        StringBuilder clean = new StringBuilder(Math.min(text.length(), 8192));
+        long bytes = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == 0x1b || (c >= 0x80 && c <= 0x9f)) continue;
+            if (c == '\r') {
+                if (i + 1 < text.length() && text.charAt(i + 1) == '\n') i++;
+                clean.append('\r');
+                bytes++;
+            } else if (c == '\n') {
+                clean.append('\r');
+                bytes++;
+            } else {
+                int codePoint = c;
+                if (Character.isHighSurrogate(c) && i + 1 < text.length()
+                        && Character.isLowSurrogate(text.charAt(i + 1))) {
+                    codePoint = Character.toCodePoint(c, text.charAt(++i));
+                    clean.appendCodePoint(codePoint);
+                } else {
+                    clean.append(c);
+                }
+                bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+            }
+            if (bytes > limit) {
+                mSession.rejectInput();
+                return;
+            }
+        }
+        // The bounded input queue accepts or rejects the entire paste, including
+        // delimiters. Separate writes could leave a program stuck in paste mode.
+        mSession.writeText(prefix, clean.toString(), suffix);
     }
 
     /** http://www.vt100.net/docs/vt510-rm/DECSC */

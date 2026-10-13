@@ -17,6 +17,11 @@ public interface TerminalSessionClient {
 
     void onPasteTextFromClipboard(TerminalSession session);
 
+    /** Input was rejected atomically because the pending queue is full. */
+    default void onInputRejected(TerminalSession session) {
+        logWarn("TerminalSession", "Input queue full");
+    }
+
     void onBell(TerminalSession session);
 
     void onColorsChanged(TerminalSession session);

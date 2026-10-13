@@ -25,6 +25,17 @@ final class JNI {
      */
     public static native int createSubprocess(String cmd, String cwd, String[] args, String[] envVars, int[] processId, int rows, int columns, int cellWidth, int cellHeight);
 
+    public static native int readPty(int fd, byte[] buffer);
+    public static native int duplicatePty(int fd);
+    public static native int writePty(int fd, byte[] buffer, int offset, int count);
+    public static native void waitForPtyWrite(int fd);
+
+    /** Interrupt the foreground job when the PTY has ISIG enabled; otherwise send normal input. */
+    public static native boolean interruptTerminal(int fd);
+
+    /** Kill the session's process tree, including background jobs in separate process groups. */
+    public static native void finishSession(int pid);
+
     /** Set the window size for a given pty, which allows connected programs to learn how large their screen is. */
     public static native void setPtyWindowSize(int fd, int rows, int cols, int cellWidth, int cellHeight);
 
@@ -34,6 +45,9 @@ final class JNI {
      * @return if >= 0, the exit status of the process. If < 0, the signal causing the process to stop negated.
      */
     public static native int waitFor(int processId);
+
+    /** Reap an exited child after its terminal session has been cleaned up. */
+    public static native void reapProcess(int processId);
 
     /** Close a file descriptor through the close(2) system call. */
     public static native void close(int fileDescriptor);
