@@ -277,7 +277,11 @@ impl Translator {
             .with_context(|| format!("failed to read image: {}", image_path.display()))?;
         let img = match region {
             Some((x, y, w, h)) => {
-                if w == 0 || h == 0 || x + w > img.width() || y + h > img.height() {
+                // checked_add: x + w can overflow u32 and slip past the bounds check
+                let fits = |start: u32, len: u32, max: u32| {
+                    len > 0 && start.checked_add(len).is_some_and(|end| end <= max)
+                };
+                if !fits(x, w, img.width()) || !fits(y, h, img.height()) {
                     return Err(crate::err::usage(format!(
                         "region out of bounds: image is {}x{}, requested x={x} y={y} w={w} h={h}",
                         img.width(),
