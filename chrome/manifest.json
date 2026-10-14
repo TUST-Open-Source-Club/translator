@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Qwen 本地翻译",
+  "version": "0.1.0",
+  "description": "右键翻译选中内容，由本地 Qwen3.5（llama.cpp）提供，离线可用",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuiZYaPRtwPIsiwyLI2FkA+gAn0KGthLpXp0EeVOLWZGJSTAkyI4t2XyrTEDRJoYgrBBwocLQMnWM5SaktHgpZk0AwS7f5BuAe1SwjFZXsjhXVmASMoc+Jway0no+WT5XL01nAchFrguWHlQ0bfeE0NDR+UAgejaipmrHMZhcLWRP/mZbTD3/fau1BtGVey6qpCZk0YvVY3TqM5fB2YKIUOHlsaHakp+bHhIG9nE2f+4Ob0pDr2kx/C8bBZbvr2oDDotrxmD8MXbGlquwpFnyjupnML0MZ2/cyAF+gBgxkcdIkRGQeM3mt70xXX7lt3du33ax3nlSf1fS3xHda6+TNwIDAQAB",
+  "minimum_chrome_version": "105",
+  "permissions": ["contextMenus", "nativeMessaging", "activeTab", "scripting"],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
